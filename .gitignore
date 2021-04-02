@@ -1,3 +1,5 @@
 dist/
 pywasm3.egg-info/
 .pytest*
+__pycache__/
+
