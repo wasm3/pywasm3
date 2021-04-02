@@ -36,6 +36,22 @@ static PyObject *M3_Runtime_Type;
 static PyObject *M3_Module_Type;
 static PyObject *M3_Function_Type;
 
+
+m3ApiRawFunction(metering_usegas)
+{
+    m3ApiGetArg     (int32_t, gas)
+
+    m3_module *mod = (m3_module *)(_ctx->userdata);
+
+    mod->current_gas -= gas;
+
+    if (UNLIKELY(mod->current_gas < 0)) {
+        m3ApiTrap("[trap] Out of gas");
+    }
+    m3ApiSuccess();
+}
+
+
 static m3_environment*
 newEnvironment(PyObject *arg)
 {
@@ -148,6 +164,15 @@ M3_Runtime_load(m3_runtime *runtime, PyObject *arg)
     if (err) {
         return formatError(PyExc_RuntimeError, runtime->r, err);
     }
+
+    err = m3_LinkRawFunctionEx (module->m, "metering", "usegas", "v(i)", &metering_usegas, module);
+    /*if (!err) {
+        self->is_gas_metered = true;
+    }*/
+    if (err && err != m3Err_functionLookupFailed) {
+        return formatError(PyExc_RuntimeError, m3_GetModuleRuntime(module->m), err);
+    }
+
     Py_RETURN_NONE;
 }
 
@@ -224,20 +249,6 @@ Module_getGasUsed(m3_module *self, void * closure)
     return PyFloat_FromDouble((double)(self->total_gas - self->current_gas)/10000.0);
 }
 
-m3ApiRawFunction(metering_usegas)
-{
-    m3ApiGetArg     (int32_t, gas)
-
-    m3_module *mod = (m3_module *)(_ctx->userdata);
-
-    mod->current_gas -= gas;
-
-    if (UNLIKELY(mod->current_gas < 0)) {
-        m3ApiTrap("[trap] Out of gas");
-    }
-    m3ApiSuccess();
-}
-
 static const char* trapException = "function raised exception";
 
 m3ApiRawFunction(CallImport)
@@ -303,14 +314,6 @@ M3_Module_link_function(m3_module *self, PyObject *args)
     }
     M3Result err = m3_LinkRawFunctionEx (self->m, PyUnicode_AsUTF8(mod_name), PyUnicode_AsUTF8(func_name),
                                          PyUnicode_AsUTF8(func_sig), CallImport, pFunc);
-    if (err && err != m3Err_functionLookupFailed) {
-        return formatError(PyExc_RuntimeError, m3_GetModuleRuntime(self->m), err);
-    }
-    
-    err = m3_LinkRawFunctionEx (self->m, "metering", "usegas", "v(i)", &metering_usegas, self);
-    /*if (!err) {
-        self->is_gas_metered = true;
-    }*/
     if (err && err != m3Err_functionLookupFailed) {
         return formatError(PyExc_RuntimeError, m3_GetModuleRuntime(self->m), err);
     }
@@ -396,7 +399,6 @@ M3_Function_call_argv(m3_function *func, PyObject *args)
 static PyObject*
 M3_Function_call(m3_function *self, PyObject *args, PyObject *kwargs)
 {
-    u32 i;
     IM3Function f = self->f;
 
     int nArgs = m3_GetArgCount(f);

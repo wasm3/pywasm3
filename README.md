@@ -1,15 +1,20 @@
 # pywasm3
 
-Python binding for Wasm3, the fastest WebAssembly interpreter.
+Python bindings for Wasm3, the fastest WebAssembly interpreter
+
+Main repository: [**Wasm3 project**](https://github.com/wasm3/wasm3)
 
 ## Install
 
 ```sh
+# Latest release:
 pip3 install pywasm3
 
+# Bleeding edge version:
+pip3 install git+git://github.com/wasm3/pywasm3.git
+
 # Or, if you have a local copy:
-python3 setup.py sdist
-pip3 install dist/pywasm3-*.tar.gz
+pip3 install .
 ```
 
 ## Usage example

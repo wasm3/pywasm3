@@ -11,7 +11,7 @@ setup(
     version      = "0.4.9",
     description  = "The fastest WebAssembly interpreter",
     platforms    = "any",
-    url          = "https://github.com/wasm3/wasm3",
+    url          = "https://github.com/wasm3/pywasm3",
     license      = "MIT",
     author       = "Volodymyr Shymanskyy",
     author_email = "vshymanskyi@gmail.com",
