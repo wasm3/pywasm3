@@ -33,7 +33,7 @@ jobs:
     - name: Test
       run: |
         pip install pytest
-        pytest platforms/python
+        pytest
 
   spellcheck:
     runs-on: ubuntu-latest
