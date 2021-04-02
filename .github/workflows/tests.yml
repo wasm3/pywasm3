@@ -22,9 +22,7 @@ jobs:
         python-version: ${{ matrix.python-version }}
     - name: Build Python module
       run: |
-        cd platforms/python
-        python setup.py sdist
-        pip install ./dist/pywasm3-*.tar.gz
+        pip install .
     - name: Install WABT
       run: |
         sudo apt install wabt
