@@ -31,8 +31,8 @@ env = wasm3.Environment()
 rt  = env.new_runtime(1024)
 mod = env.parse_module(WASM)
 rt.load(mod)
-func = rt.find_function("fib")
-result = func.call_argv("24")
+wasm_fib = rt.find_function("fib")
+result = wasm_fib(24)
 print(result)                       # 46368
 ```
 
