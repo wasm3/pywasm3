@@ -11,7 +11,7 @@ Main repository: [**Wasm3 project**](https://github.com/wasm3/wasm3)
 pip3 install pywasm3
 
 # Bleeding edge version:
-pip3 install git+git://github.com/wasm3/pywasm3.git
+pip3 install https://github.com/wasm3/pywasm3/archive/main.tar.gz
 
 # Or, if you have a local copy:
 pip3 install .
