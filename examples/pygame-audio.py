@@ -9,6 +9,8 @@ os.environ['PYGAME_HIDE_SUPPORT_PROMPT'] = "true"
 
 sample_rate = 22050     # or 44100
 
+prebuffer = 1024
+
 def draw(c):
     print(c, end='', flush=True)
 
@@ -55,9 +57,8 @@ if __name__ == '__main__':
         mod = env.parse_module(f.read())
         rt.load(mod)
 
-    print("Pre-buffering...")
     buff = b''
-    buff_sz = 1024
+    buff_sz = prebuffer
 
     def fd_write(fd, wasi_iovs, iows_len, nwritten):
         global buff, buff_sz
@@ -73,12 +74,21 @@ if __name__ == '__main__':
 
         # buffer
         buff += data
-        if len(buff) > buff_sz*1024:
+
+        if buff_sz == prebuffer:
+            progress = int(100*len(buff)/(prebuffer*1024))
+            if not progress % 5:
+                draw(f"\rPre-buffering... {progress}%")
+
+            if len(buff) >= prebuffer*1024:
+                buff_sz = 64
+                draw("\n")
+
+        if len(buff) >= buff_sz*1024:
             #draw("+")
             q.put(buff)
-            time.sleep(0.01)
             buff = b''
-            buff_sz = 64
+            time.sleep(0.01)
 
         return size
 
