@@ -84,12 +84,6 @@ const void * const  cvptr_t;
 #       define m3log_compile(...) {}
 #   endif
 
-#   if d_m3LogWasmStack
-#       define m3log_stack(CATEGORY, FMT, ...)          d_m3Log(CATEGORY, FMT, ##__VA_ARGS__)
-#   else
-#       define m3log_stack(...) {}
-#   endif
-
 #   if d_m3LogEmit
 #       define m3log_emit(CATEGORY, FMT, ...)           d_m3Log(CATEGORY, FMT, ##__VA_ARGS__)
 #   else
@@ -121,7 +115,7 @@ const void * const  cvptr_t;
 # endif
 
 
-# if (defined(DEBUG) && !defined(NASSERTS))
+# if defined(ASSERTS) || (defined(DEBUG) && !defined(NASSERTS))
 #   define d_m3Assert(ASS)  if (!(ASS)) { printf("Assertion failed at %s:%d : %s\n", __FILE__, __LINE__, #ASS); abort(); }
 # else
 #   define d_m3Assert(ASS)

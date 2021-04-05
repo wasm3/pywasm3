@@ -496,6 +496,21 @@ M3Result  Pop  (IM3Compilation o)
     return result;
 }
 
+M3Result  PopType  (IM3Compilation o, u8 i_type)
+{
+    M3Result result = m3Err_none;
+
+    u8 topType = GetStackTopType (o);
+
+    if (i_type == topType or o->block.isPolymorphic)
+    {
+        result = Pop (o);
+    }
+    else result = m3Err_typeMismatch;
+
+    return result;
+}
+
 
 M3Result  UnwindBlockStack  (IM3Compilation o)
 {
@@ -995,8 +1010,10 @@ M3Result  Compile_Return  (IM3Compilation o, m3opcode_t i_opcode)
 
     if (GetFunctionNumReturns (o->function))
     {
+        u8 type = GetFunctionReturnType (o->function, 0);
+
 _       (ReturnStackTop (o));
-_       (Pop (o));
+_       (PopType (o, type));
     }
 
 _   (EmitOp (o, op_Return));
@@ -1014,10 +1031,13 @@ M3Result  Compile_End  (IM3Compilation o, m3opcode_t i_opcode)
     // function end:
     if (o->block.depth == 0)
     {
-        u8 valueType = GetSingleRetType(o->block.type);
+        u8 type = GetSingleRetType (o->block.type);
 
-        if (valueType)
+        if (type)
         {
+            if (not o->block.isPolymorphic and type != GetStackTopType (o))
+                _throw (m3Err_typeMismatch);
+
             // if there are branches to the function end, then their values are in a register
             // if the block happens to have its top in a register too, then we can patch the branch
             // to here. Otherwise, an ReturnStackTop is appended to the end of the function (at B) and
@@ -1034,11 +1054,11 @@ _       (EmitOp (o, op_Return));
 _       (UnwindBlockStack (o));
 
         // B: move register to return slot for branchehs
-        if (valueType)
+        if (type)
         {
             if (PatchBranches (o))
             {
-_               (PushRegister (o, valueType));
+_               (PushRegister (o, type));
                 ReturnStackTop (o);
 _               (EmitOp (o, op_Return));
             }
@@ -1466,12 +1486,14 @@ _   (EmitOp         (o, op_CallIndirect));
 }
 
 
-M3Result  Compile_Memory_Current  (IM3Compilation o, m3opcode_t i_opcode)
+M3Result  Compile_Memory_Size  (IM3Compilation o, m3opcode_t i_opcode)
 {
     M3Result result;
 
     i8 reserved;
 _   (ReadLEB_i7 (& reserved, & o->wasm, o->wasmEnd));
+
+_   (PreserveRegisterIfOccupied (o, c_m3Type_i32));
 
 _   (EmitOp     (o, op_MemCurrent));
 
@@ -1951,8 +1973,8 @@ const M3OpInfo c_operations [] =
     M3OP( "i64.store16",        -2, none,   d_binOpList (i64, Store_i16),       Compile_Load_Store ),   // 0x3d
     M3OP( "i64.store32",        -2, none,   d_binOpList (i64, Store_i32),       Compile_Load_Store ),   // 0x3e
 
-    M3OP( "memory.current",     1,  i_32,   d_logOp (MemCurrent),               Compile_Memory_Current ),   // 0x3f
-    M3OP( "memory.grow",        1,  i_32,   d_logOp (MemGrow),                  Compile_Memory_Grow ),      // 0x40
+    M3OP( "memory.size",        1,  i_32,   d_logOp (MemCurrent),               Compile_Memory_Size ),  // 0x3f
+    M3OP( "memory.grow",        1,  i_32,   d_logOp (MemGrow),                  Compile_Memory_Grow ),  // 0x40
 
     M3OP( "i32.const",          1,  i_32,   d_logOp (Const32),                  Compile_Const_i32 ),    // 0x41
     M3OP( "i64.const",          1,  i_64,   d_logOp (Const64),                  Compile_Const_i64 ),    // 0x42
@@ -2179,7 +2201,7 @@ M3Result  Compile_BlockStatements  (IM3Compilation o)
 #endif
 
         IM3OpInfo opinfo = GetOpInfo(opcode);
-        _throwif(m3Err_unknownOpcode, opinfo == NULL);
+        _throwif (m3Err_unknownOpcode, opinfo == NULL);
 
         if (opinfo->compiler) {
             result = (* opinfo->compiler) (o, opcode);
@@ -2209,7 +2231,7 @@ M3Result  ValidateBlockEnd  (IM3Compilation o, bool * o_copyStackTopToRegister)
 
     * o_copyStackTopToRegister = false;
 
-    u8 valueType = GetSingleRetType(o->block.type);
+    u8 valueType = GetSingleRetType (o->block.type);
 
     if (valueType != c_m3Type_none)
     {
@@ -2341,8 +2363,9 @@ M3Result  Compile_Function  (IM3Function io_function)
 {
     IM3FuncType ft = io_function->funcType;
 
-    M3Result result = m3Err_none;                                     m3log (compile, "compiling: '%s'; wasm-size: %d; numArgs: %d; return: %s",
-                                                                           m3_GetFunctionName(io_function), (u32) (io_function->wasmEnd - io_function->wasm), GetFunctionNumArgs (io_function), c_waTypes [GetSingleRetType(ft)]);
+    M3Result result = m3Err_none;                                   m3log (compile, "compiling: '%s'; wasm-size: %d; numArgs: %d; return: %s",
+                                                                           m3_GetFunctionName(io_function), (u32) (io_function->wasmEnd - io_function->wasm), GetFunctionNumArgs (io_function),
+                                                                           c_waTypes [GetSingleRetType(ft)]);
     IM3Runtime runtime = io_function->module->runtime;
 
     IM3Compilation o = & runtime->compilation;
@@ -2355,6 +2378,10 @@ M3Result  Compile_Function  (IM3Function io_function)
     o->wasmEnd  = io_function->wasmEnd;
 
 _try {
+    // skip over code size. the end was already calculated during parse phase
+    u32 size;
+_   (ReadLEB_u32 (& size, & o->wasm, o->wasmEnd));                  d_m3Assert (size == (o->wasmEnd - o->wasm))
+
 _   (AcquireCompilationCodePage (o, & o->page));
 
     pc_t pc = GetPagePC (o->page);

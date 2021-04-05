@@ -30,7 +30,7 @@ def player(q):
                 time.sleep(0.01)
 
             channel.queue(chunk)
-    except (KeyboardInterrupt, SystemExit):
+    except (TypeError, KeyboardInterrupt, SystemExit):
         pass
     finally:
         pygame.quit()

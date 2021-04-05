@@ -57,7 +57,7 @@ typedef struct M3Function
     void *                  constants;
     u16                     numConstantBytes;
 
-    //bool                    ownsWasmCode;
+    bool                    ownsWasmCode;
 }
 M3Function;
 
@@ -68,6 +68,7 @@ cstr_t      GetFunctionImportModuleName (IM3Function i_function);
 cstr_t *    GetFunctionNames            (IM3Function i_function, u16 * o_numNames);
 u32         GetFunctionNumArgs          (IM3Function i_function);
 u32         GetFunctionNumReturns       (IM3Function i_function);
+u8          GetFunctionReturnType       (IM3Function i_function, u32 i_index);
 
 u32         GetFunctionNumArgsAndLocals (IM3Function i_function);
 
@@ -127,6 +128,7 @@ typedef struct M3Global
 #endif
     };
 
+    cstr_t                  name;
     bytes_t                 initExpr;       // wasm code
     u32                     initExprSize;
     u8                      type;
@@ -149,10 +151,10 @@ typedef struct M3Module
     cstr_t                  name;
 
     u32                     numFuncTypes;
-    IM3FuncType *           funcTypes;          // array of pointers to list of FuncTypes
+    IM3FuncType *           funcTypes;              // array of pointers to list of FuncTypes
 
     u32                     numImports;
-    //IM3Function *           imports;   b         // notice: "I" prefix. imports are pointers to functions in another module.
+    //IM3Function *           imports;   b          // notice: "I" prefix. imports are pointers to functions in another module.
 
     u32                     numFunctions;
     M3Function *            functions;
@@ -193,10 +195,10 @@ typedef struct M3Environment
 {
 //    struct M3Runtime *      runtimes;
 
-    IM3FuncType             funcTypes;          // linked list
+    IM3FuncType             funcTypes;                          // linked list
 
-    IM3FuncType             retFuncTypes[5];    // the number of elements must match the basic types as per M3ValueType
-
+    IM3FuncType             retFuncTypes [c_m3Type_unknown];    // these 'point' to elements in the linked list above.
+                                                                // the number of elements must match the basic types as per M3ValueType
     M3CodePage *            pagesReleased;
 }
 M3Environment;
