@@ -322,6 +322,49 @@ M3_Module_link_function(m3_module *self, PyObject *args)
     Py_RETURN_NONE;
 }
 
+static PyObject *
+M3_Module_get_global(m3_module *self, PyObject *arg)
+{
+    M3TaggedValue tagged;
+    M3Result err = m3_GetGlobal (self->m, PyUnicode_AsUTF8(arg), &tagged);
+    if (err) {
+        return formatError(PyExc_RuntimeError, m3_GetModuleRuntime(self->m), err);
+    }
+    switch (tagged.type) {
+        case c_m3Type_i32:  return PyLong_FromLong(     tagged.value.i32);   break;
+        case c_m3Type_i64:  return PyLong_FromLongLong( tagged.value.i64);   break;
+        case c_m3Type_f32:  return PyFloat_FromDouble(  tagged.value.f32);   break;
+        case c_m3Type_f64:  return PyFloat_FromDouble(  tagged.value.f64);   break;
+    }
+    return PyErr_Format(PyExc_TypeError, "unknown type %d", (int)tagged.type);
+}
+
+static PyObject *
+M3_Module_set_global(m3_module *self, PyObject *args)
+{
+    if (PyTuple_Size(args) != 2) {
+        PyErr_SetString(PyExc_TypeError, "set_global takes 2 arguments");
+        return NULL;
+    }
+
+    PyObject *name  = PyTuple_GET_ITEM(args, 0);
+    PyObject *value = PyTuple_GET_ITEM(args, 1);
+    
+    // TODO: support other types
+    M3TaggedValue tagged = {
+        .type = c_m3Type_f32,
+        .value.f32 = PyFloat_AsDouble(value)
+    };
+
+    M3Result err = m3_SetGlobal (self->m, PyUnicode_AsUTF8(name), &tagged);
+
+    if (err) {
+        return formatError(PyExc_RuntimeError, m3_GetModuleRuntime(self->m), err);
+    }
+
+    Py_RETURN_NONE;
+}
+
 static PyGetSetDef M3_Module_properties[] = {
     {"name",        (getter) Module_name, NULL, "module name", NULL},
     {"gasLimit",    (getter) Module_getGasLimit, (setter) Module_setGasLimit, "gas limit for metered modules", NULL},
@@ -332,6 +375,13 @@ static PyGetSetDef M3_Module_properties[] = {
 static PyMethodDef M3_Module_methods[] = {
     {"link_function", (PyCFunction)M3_Module_link_function,  METH_VARARGS,
         PyDoc_STR("link_function(module, name, signature, function)")},
+
+    {"get_global", (PyCFunction)M3_Module_get_global,  METH_O,
+        PyDoc_STR("get_global(name) -> value")},
+
+    {"set_global", (PyCFunction)M3_Module_set_global,  METH_VARARGS,
+        PyDoc_STR("set_global(name, value)")},
+
     {NULL,              NULL}           /* sentinel */
 };
 
@@ -378,6 +428,34 @@ get_result_from_stack(m3_function *func)
     return get_arg_from_stack(valptrs[0], m3_GetRetType(func->f, 0));
 }
 
+static
+void print_backtrace(IM3Runtime runtime)
+{
+    IM3BacktraceInfo info = m3_GetBacktrace(runtime);
+    if (!info) {
+        return;
+    }
+
+    fprintf(stderr, "==== wasm backtrace:");
+
+    int frameCount = 0;
+    IM3BacktraceFrame curr = info->frames;
+    while (curr)
+    {
+        fprintf(stderr, "\n  %d: 0x%06x - %s!%s",
+                           frameCount, curr->moduleOffset,
+                           m3_GetModuleName (m3_GetFunctionModule(curr->function)),
+                           m3_GetFunctionName (curr->function)
+               );
+        curr = curr->next;
+        frameCount++;
+    }
+    if (info->lastFrame == M3_BACKTRACE_TRUNCATED) {
+        fprintf(stderr, "\n  (truncated)");
+    }
+    fprintf(stderr, "\n");
+}
+
 static PyObject *
 M3_Function_call_argv(m3_function *func, PyObject *args)
 {
@@ -388,8 +466,9 @@ M3_Function_call_argv(m3_function *func, PyObject *args)
     }
     M3Result err = m3_CallArgv(func->f, size, argv);
     if (err == trapException) {
-		return NULL;
-	} else if (err) {
+        return NULL;
+    } else if (err) {
+        print_backtrace(func->r);
         return formatError(PyExc_RuntimeError, func->r, err);
     }
 
@@ -420,9 +499,10 @@ M3_Function_call(m3_function *self, PyObject *args, PyObject *kwargs)
     }
 
     M3Result err = m3_Call (f, nArgs, valptrs);
-	if (err == trapException) {
-		return NULL;
-	} else if (err) {
+    if (err == trapException) {
+        return NULL;
+    } else if (err) {
+        print_backtrace(self->r);
         return formatError(PyExc_RuntimeError, self->r, err);
     }
 

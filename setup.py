@@ -23,7 +23,9 @@ setup(
         Extension('wasm3', sources=SOURCES, include_dirs=['wasm3'],
         extra_compile_args=['-g0', '-O3', '-march=native',
                             '-fomit-frame-pointer', '-fno-stack-check', '-fno-stack-protector',
-                            '-DDEBUG', '-DNASSERTS'])
+                            '-DDEBUG', '-DNASSERTS', '-Dd_m3RecordBacktraces=1',
+                            #'-Dd_m3EnableStrace=2'
+                            ])
     ],
 
     classifiers  = [
