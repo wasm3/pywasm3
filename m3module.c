@@ -323,10 +323,11 @@ M3_Module_link_function(m3_module *self, PyObject *args)
 }
 
 static PyObject *
-M3_Module_get_global(m3_module *self, PyObject *arg)
+M3_Module_get_global(m3_module *self, PyObject *name)
 {
     M3TaggedValue tagged;
-    M3Result err = m3_GetGlobal (self->m, PyUnicode_AsUTF8(arg), &tagged);
+    IM3Global g = m3_FindGlobal(self->m, PyUnicode_AsUTF8(name));
+    M3Result err = m3_GetGlobal (g, &tagged);
     if (err) {
         return formatError(PyExc_RuntimeError, m3_GetModuleRuntime(self->m), err);
     }
@@ -335,8 +336,8 @@ M3_Module_get_global(m3_module *self, PyObject *arg)
         case c_m3Type_i64:  return PyLong_FromLongLong( tagged.value.i64);   break;
         case c_m3Type_f32:  return PyFloat_FromDouble(  tagged.value.f32);   break;
         case c_m3Type_f64:  return PyFloat_FromDouble(  tagged.value.f64);   break;
+        default:            return PyErr_Format(PyExc_TypeError, "unknown type %d", (int)tagged.type);
     }
-    return PyErr_Format(PyExc_TypeError, "unknown type %d", (int)tagged.type);
 }
 
 static PyObject *
@@ -349,14 +350,22 @@ M3_Module_set_global(m3_module *self, PyObject *args)
 
     PyObject *name  = PyTuple_GET_ITEM(args, 0);
     PyObject *value = PyTuple_GET_ITEM(args, 1);
-    
-    // TODO: support other types
+
+    IM3Global g = m3_FindGlobal(self->m, PyUnicode_AsUTF8(name));
+
     M3TaggedValue tagged = {
-        .type = c_m3Type_f32,
-        .value.f32 = PyFloat_AsDouble(value)
+        .type      = m3_GetGlobalType(g)
     };
 
-    M3Result err = m3_SetGlobal (self->m, PyUnicode_AsUTF8(name), &tagged);
+    switch (tagged.type) {
+        case c_m3Type_i32:  tagged.value.i32 = PyLong_AsLong(value);        break;
+        case c_m3Type_i64:  tagged.value.i64 = PyLong_AsLongLong(value);    break;
+        case c_m3Type_f32:  tagged.value.f32 = PyFloat_AsDouble(value);     break;
+        case c_m3Type_f64:  tagged.value.f64 = PyFloat_AsDouble(value);     break;
+        default:            return PyErr_Format(PyExc_TypeError, "unknown type %d", (int)tagged.type);
+    }
+
+    M3Result err = m3_SetGlobal (g, &tagged);
 
     if (err) {
         return formatError(PyExc_RuntimeError, m3_GetModuleRuntime(self->m), err);

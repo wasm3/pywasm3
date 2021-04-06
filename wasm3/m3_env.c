@@ -750,10 +750,10 @@ _       (InitElements (io_module));
     _catch: return result;
 }
 
-
-IM3Global  FindGlobal  (IM3Module                 io_module,
-                        const char * const        i_globalName)
+IM3Global  m3_FindGlobal  (IM3Module               io_module,
+                           const char * const      i_globalName)
 {
+	// Search exports
     for (u32 i = 0; i < io_module->numGlobals; ++i)
     {
         IM3Global g = & io_module->globals [i];
@@ -763,6 +763,7 @@ IM3Global  FindGlobal  (IM3Module                 io_module,
         }
     }
 
+	// Search imports
     for (u32 i = 0; i < io_module->numGlobals; ++i)
     {
         IM3Global g = & io_module->globals [i];
@@ -778,45 +779,45 @@ IM3Global  FindGlobal  (IM3Module                 io_module,
     return NULL;
 }
 
+M3Result  m3_GetGlobal  (IM3Global                 i_global,
+                         IM3TaggedValue            o_value)
+{
+    if (not i_global) return m3Err_globalLookupFailed;
 
-M3Result  m3_SetGlobal  (IM3Module                 io_module,
-                         const char * const        i_globalName,
+    switch (i_global->type) {
+    case c_m3Type_i32: o_value->value.i32 = i_global->intValue; break;
+    case c_m3Type_i64: o_value->value.i64 = i_global->intValue; break;
+    case c_m3Type_f32: o_value->value.f32 = i_global->f32Value; break;
+    case c_m3Type_f64: o_value->value.f64 = i_global->f64Value; break;
+    default: return m3Err_invalidTypeId;
+    }
+
+    o_value->type = i_global->type;
+    return m3Err_none;
+}
+
+M3Result  m3_SetGlobal  (IM3Global                 i_global,
                          const IM3TaggedValue      i_value)
 {
-    IM3Global g = FindGlobal(io_module, i_globalName);
-    if (not g) return "global not found";
-    // TODO: if (not g->isMutable) return "global not mutable";
+    if (not i_global) return m3Err_globalLookupFailed;
+    // TODO: if (not g->isMutable) return m3Err_globalNotMutable;
 
-    if (g->type != i_value->type) return "type mismatch";
+    if (i_global->type != i_value->type) return m3Err_globalTypeMismatch;
 
     switch (i_value->type) {
-    case c_m3Type_i32: g->intValue = i_value->value.i32; break;
-    case c_m3Type_i64: g->intValue = i_value->value.i64; break;
-    case c_m3Type_f32: g->f32Value = i_value->value.f32; break;
-    case c_m3Type_f64: g->f64Value = i_value->value.f64; break;
-    default: return "invalid type";
+    case c_m3Type_i32: i_global->intValue = i_value->value.i32; break;
+    case c_m3Type_i64: i_global->intValue = i_value->value.i64; break;
+    case c_m3Type_f32: i_global->f32Value = i_value->value.f32; break;
+    case c_m3Type_f64: i_global->f64Value = i_value->value.f64; break;
+    default: return m3Err_invalidTypeId;
     }
 
     return m3Err_none;
 }
 
-M3Result  m3_GetGlobal  (IM3Module                 io_module,
-                         const char * const        i_globalName,
-                         IM3TaggedValue            o_value)
+M3ValueType  m3_GetGlobalType  (IM3Global          i_global)
 {
-    IM3Global g = FindGlobal(io_module, i_globalName);
-    if (not g) return "global not found";
-
-    switch (g->type) {
-    case c_m3Type_i32: o_value->value.i32 = g->intValue; break;
-    case c_m3Type_i64: o_value->value.i64 = g->intValue; break;
-    case c_m3Type_f32: o_value->value.f32 = g->f32Value; break;
-    case c_m3Type_f64: o_value->value.f64 = g->f64Value; break;
-    default: return "invalid type";
-    }
-
-    o_value->type = g->type;
-    return m3Err_none;
+	return (i_global) ? i_global->type : c_m3Type_none;
 }
 
 
