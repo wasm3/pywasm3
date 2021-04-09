@@ -30,17 +30,16 @@ def player(q):
                 time.sleep(0.01)
 
             channel.queue(chunk)
-    except (TypeError, KeyboardInterrupt, SystemExit):
-        pass
-    finally:
+    except (TypeError, BrokenPipeError, KeyboardInterrupt, SystemExit):
         pygame.quit()
 
 
 if __name__ == '__main__':
 
-    print("Hondarribia - intro song for WebAssembly Summit 2020 by Peter Salomonsen")
+    print("Hondarribia by Peter Salomonsen - intro song for WebAssembly Summit 2020")
     print("Source:      https://petersalomonsen.com/webassemblymusic/livecodev2/?gist=5b795090ead4f192e7f5ee5dcdd17392")
     print("Synthesized: https://soundcloud.com/psalomo/hondarribia")
+    print()
 
     q = mp.Queue()
     p = mp.Process(target=player, args=(q,))
@@ -70,7 +69,7 @@ if __name__ == '__main__':
 
         # decode
         arr = numpy.frombuffer(data, dtype=numpy.float32) 
-        data = (arr * 32768).astype(numpy.int16).tobytes()
+        data = (arr.clip(-1,1) * 32767).astype(numpy.int16).tobytes()
 
         # buffer
         buff += data
