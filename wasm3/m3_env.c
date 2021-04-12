@@ -260,10 +260,11 @@ void  m3_FreeRuntime  (IM3Runtime i_runtime)
     }
 }
 
-
 M3Result  EvaluateExpression  (IM3Module i_module, void * o_expressed, u8 i_type, bytes_t * io_bytes, cbytes_t i_end)
 {
     M3Result result = m3Err_none;
+
+    // OPTZ: use a simplified interpreter for expressions
 
     // create a temporary runtime context
 #if defined(d_m3PreferStaticAlloc)
