@@ -358,7 +358,7 @@ void  dump_type_stack  (IM3Compilation o)
             {
                 if (slot >= o->slotFirstConstIndex)
                     printf ("c");
-                else if (slot >= o->function->numArgSlots)
+                else if (slot >= o->function->numRetAndArgSlots)
                     printf ("L");
                 else
                     printf ("a");

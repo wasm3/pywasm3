@@ -51,7 +51,7 @@ if __name__ == '__main__':
     # Prepare Wasm3 engine
 
     env = wasm3.Environment()
-    rt = env.new_runtime(1024)
+    rt = env.new_runtime(2048)
     with open(wasm_fn, "rb") as f:
         mod = env.parse_module(f.read())
         rt.load(mod)

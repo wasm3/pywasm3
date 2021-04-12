@@ -26,6 +26,31 @@ bool  AreFuncTypesEqual  (const IM3FuncType i_typeA, const IM3FuncType i_typeB)
     return false;
 }
 
+u16  GetFuncTypeNumReturns  (const IM3FuncType i_funcType)
+{
+    return i_funcType ? i_funcType->numRets : 0;
+}
+
+
+u8  GetFuncTypeReturnType  (const IM3FuncType i_funcType, u16 i_index)
+{
+    u8 type = c_m3Type_unknown;
+
+    if (i_funcType)
+    {
+        if (i_index < i_funcType->numRets)
+        {
+            type = i_funcType->types [i_index];
+        }
+    }
+
+    return type;
+}
+
+
+//---------------------------------------------------------------------------------------------------------------
+
+
 void FreeImportInfo (M3ImportInfo * i_info)
 {
     m3_Free (i_info->moduleUtf8);
@@ -140,6 +165,19 @@ u16  GetFunctionNumArgs  (IM3Function i_function)
     return numArgs;
 }
 
+u8  GetFunctionArgType  (IM3Function i_function, u32 i_index)
+{
+    u8 type = c_m3Type_none;
+
+    if (i_index < GetFunctionNumArgs (i_function))
+    {
+        u32 numReturns = i_function->funcType->numRets;
+
+        type = i_function->funcType->types [numReturns + i_index];
+    }
+
+    return type;
+}
 
 
 u16  GetFunctionNumReturns  (IM3Function i_function)
@@ -158,14 +196,7 @@ u16  GetFunctionNumReturns  (IM3Function i_function)
 
 u8  GetFunctionReturnType  (const IM3Function i_function, u16 i_index)
 {
-    u8 type = c_m3Type_none;
-
-    if (i_index < GetFunctionNumReturns (i_function))
-    {
-        type = i_function->funcType->types [i_index];
-    }
-
-    return type;
+    return i_function ? GetFuncTypeReturnType (i_function->funcType, i_index) : c_m3Type_unknown;
 }
 
 

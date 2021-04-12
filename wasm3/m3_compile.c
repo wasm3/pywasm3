@@ -55,6 +55,8 @@ static const IM3Operation c_fpSelectOps [2] [2] [3] = { { { op_Select_f32_sss, o
 static const u16 c_m3RegisterUnallocated = 0;
 static const u16 c_slotUnused = 0xffff;
 
+// all args & returns are 64-bit aligned, so use 2 slots for a d_m3Use32BitSlots=1 build
+static const u16 c_ioSlotCount = sizeof (u64) / sizeof (m3slot_t);
 
 M3Result  AcquireCompilationCodePage  (IM3Compilation o, IM3CodePage * o_codePage)
 {
@@ -1030,7 +1032,9 @@ M3Result  Compile_End  (IM3Compilation o, m3opcode_t i_opcode)
     {
         u8 type = GetSingleRetType (o->block.type);
 
-        if (type)
+        u32 numReturns = GetFuncTypeNumReturns (o->block.type);
+
+        if (numReturns)
         {
             if (not o->block.isPolymorphic and type != GetStackTopType (o))
                 _throw (m3Err_typeMismatch);
@@ -1377,21 +1381,25 @@ _try {
 _       (Pop (o));
 
     u16 numArgs = i_type->numArgs;
+    u16 numRets = i_type->numRets;
 
-    // args are 64-bit aligned
-    const u16 slotsPerArg = sizeof (u64) / sizeof (m3slot_t);
-    u16 argTop = topSlot + numArgs * slotsPerArg;
+    u16 argTop = topSlot + (numArgs + numRets) * c_ioSlotCount;
 
     while (numArgs--)
     {
-_       (CopyTopSlot (o, argTop -= slotsPerArg));
+_       (CopyTopSlot (o, argTop -= c_ioSlotCount));
 _       (Pop (o));
     }
 
     if (i_type->numRets)
     {
-        MarkSlotAllocated (o, topSlot);
-_       (Push (o, GetSingleRetType (i_type), topSlot));
+        u8 type = GetSingleRetType (i_type);
+
+_       (Push (o, type, topSlot));
+
+        u16 numSlots = GetTypeNumSlots (type);
+        while (numSlots--)
+            MarkSlotAllocated (o, topSlot++);
     }
 
     } _catch: return result;
@@ -2177,17 +2185,20 @@ const M3OpInfo c_operationsFC [] =
 # endif
 };
 
-const M3OpInfo* GetOpInfo(m3opcode_t opcode) {
+const M3OpInfo*  GetOpInfo  (m3opcode_t opcode)
+{
     switch (opcode >> 8) {
     case 0x00:
         if (opcode < M3_COUNT_OF(c_operations)) {
             return &c_operations[opcode];
         }
+        break;
     case 0xFC:
         opcode &= 0xFF;
         if (opcode < M3_COUNT_OF(c_operationsFC)) {
             return &c_operationsFC[opcode];
         }
+        break;
     }
     return NULL;
 }
@@ -2389,30 +2400,27 @@ _   (AcquireCompilationCodePage (o, & o->page));
 
     pc_t pc = GetPagePC (o->page);
 
-    // all args & returns are 64-bit aligned, so use 2 slots for a d_m3Use32BitSlots=1 build
-    const u16 ioSlotCount = sizeof (u64) / sizeof (m3slot_t);
+    u16 numRetSlots = GetFunctionNumReturns (o->function) * c_ioSlotCount;
 
-    u32 numArgs = GetFunctionNumArgs (o->function);
-    u32 numRets = GetFunctionNumReturns(o->function);
+    for (u16 i = 0; i < numRetSlots; ++i)
+        MarkSlotAllocated (o, i);
 
-    for (u32 i = 0; i < numArgs; ++i)
+    o->function->numRetSlots = o->slotFirstDynamicIndex = numRetSlots;
+
+    u16 numArgs = GetFunctionNumArgs (o->function);
+
+    // push the arg types to the type stack
+    for (u16 i = 0; i < numArgs; ++i)
     {
-        u8 type = funcType->types [numRets + i];
+        u8 type = GetFunctionArgType (o->function, i);
 _       (PushAllocatedSlot (o, type));
 
-        if (i < numArgs - 1)
-        {
-            // prevent allocator fill-in
-            o->slotFirstDynamicIndex += ioSlotCount;
-        }
-        else
-        {
-            // final arg only allocates its natural width when using 32-bit slots
-            o->slotFirstDynamicIndex += GetTypeNumSlots (type);
-        }
+        // prevent allocator fill-in
+        o->slotFirstDynamicIndex += c_ioSlotCount;
     }
 
-    o->function->numArgSlots = o->slotFirstLocalIndex = o->slotFirstDynamicIndex;
+    o->slotMaxAllocatedIndexPlusOne = o->function->numRetAndArgSlots = o->slotFirstLocalIndex = o->slotFirstDynamicIndex;
+
 _   (CompileLocals (o));
 
     u16 maxSlot = GetMaxUsedSlotPlusOne (o);

@@ -753,6 +753,20 @@ M3ValueType  m3_GetRetType  (IM3Function i_function, uint32_t index)
     return c_m3Type_none;
 }
 
+
+u8 *  GetStackPointerForArgs  (IM3Function i_function)
+{
+    u64 * stack = (u64 *) i_function->module->runtime->stack;
+    IM3FuncType ftype = i_function->funcType;
+
+    u16 numReturnSlots = ftype->numRets;
+
+    stack += numReturnSlots;
+
+    return (u8 *) stack;
+}
+
+
 M3Result  m3_CallV  (IM3Function i_function, ...)
 {
     va_list ap;
@@ -775,7 +789,8 @@ M3Result  m3_CallVL  (IM3Function i_function, va_list i_args)
     ClearBacktrace (runtime);
 # endif
 
-    u8* s = (u8*) runtime->stack;
+    u8* s = GetStackPointerForArgs (i_function);
+
     for (u32 i = 0; i < ftype->numArgs; ++i)
     {
         switch (d_FuncArgType(ftype, i)) {
@@ -815,7 +830,8 @@ M3Result  m3_Call  (IM3Function i_function, uint32_t i_argc, const void * i_argp
     ClearBacktrace (runtime);
 # endif
 
-    u8* s = (u8*) runtime->stack;
+    u8* s = GetStackPointerForArgs (i_function);
+
     for (u32 i = 0; i < ftype->numArgs; ++i)
     {
         switch (d_FuncArgType(ftype, i)) {
@@ -856,7 +872,8 @@ M3Result  m3_CallArgv  (IM3Function i_function, uint32_t i_argc, const char * i_
     ClearBacktrace (runtime);
 # endif
 
-    u8* s = (u8*) runtime->stack;
+    u8* s = GetStackPointerForArgs (i_function);
+
     for (u32 i = 0; i < ftype->numArgs; ++i)
     {
         switch (d_FuncArgType(ftype, i)) {
@@ -881,6 +898,14 @@ M3Result  m3_CallArgv  (IM3Function i_function, uint32_t i_argc, const char * i_
     return r;
 }
 
+
+u8 * AlignStackPointerTo64Bits (const u8 * i_stack)
+{
+    uintptr_t ptr = (uintptr_t) i_stack;
+    return (u8 *) ((ptr + 7) & ~7);
+}
+
+
 M3Result  m3_GetResults  (IM3Function i_function, uint32_t i_retc, const void * o_retptrs[])
 {
     IM3FuncType ftype = i_function->funcType;
@@ -894,13 +919,14 @@ M3Result  m3_GetResults  (IM3Function i_function, uint32_t i_retc, const void * 
     }
 
     u8* s = (u8*) runtime->stack;
+
     for (u32 i = 0; i < ftype->numRets; ++i)
     {
         switch (d_FuncRetType(ftype, i)) {
-        case c_m3Type_i32:  *(i32*)o_retptrs[i] = *(i32*)(s); s += 8; break;
-        case c_m3Type_i64:  *(i64*)o_retptrs[i] = *(i64*)(s); s += 8; break;
-        case c_m3Type_f32:  *(f32*)o_retptrs[i] = *(f32*)(s); s += 8; break;
-        case c_m3Type_f64:  *(f64*)o_retptrs[i] = *(f64*)(s); s += 8; break;
+        case c_m3Type_i32:  *(i32*)o_retptrs[i] = *(i32*)(s); s += 4; break;
+        case c_m3Type_i64:  s = AlignStackPointerTo64Bits (s); *(i64*)o_retptrs[i] = *(i64*)(s); s += 8; break;
+        case c_m3Type_f32:  *(f32*)o_retptrs[i] = *(f32*)(s); s += 4; break;
+        case c_m3Type_f64:  s = AlignStackPointerTo64Bits (s); *(f64*)o_retptrs[i] = *(f64*)(s); s += 8; break;
         default: return "unknown return type";
         }
     }
@@ -929,10 +955,10 @@ M3Result  m3_GetResultsVL  (IM3Function i_function, va_list o_rets)
     for (u32 i = 0; i < ftype->numRets; ++i)
     {
         switch (d_FuncRetType(ftype, i)) {
-        case c_m3Type_i32:  *va_arg(o_rets, i32*) = *(i32*)(s);  s += 8; break;
-        case c_m3Type_i64:  *va_arg(o_rets, i64*) = *(i64*)(s);  s += 8; break;
-        case c_m3Type_f32:  *va_arg(o_rets, f32*) = *(f32*)(s);  s += 8; break;
-        case c_m3Type_f64:  *va_arg(o_rets, f64*) = *(f64*)(s);  s += 8; break;
+        case c_m3Type_i32:  *va_arg(o_rets, i32*) = *(i32*)(s);  s += 4; break;
+        case c_m3Type_i64:  s = AlignStackPointerTo64Bits (s); *va_arg(o_rets, i64*) = *(i64*)(s);  s += 8; break;
+        case c_m3Type_f32:  *va_arg(o_rets, f32*) = *(f32*)(s);  s += 4; break;
+        case c_m3Type_f64:  s = AlignStackPointerTo64Bits (s); *va_arg(o_rets, f64*) = *(f64*)(s);  s += 8; break;
         default: return "unknown argument type";
         }
     }

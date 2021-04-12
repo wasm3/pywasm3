@@ -29,7 +29,8 @@ typedef M3FuncType *        IM3FuncType;
 
 M3Result    AllocFuncType                   (IM3FuncType * o_functionType, u32 i_numTypes);
 bool        AreFuncTypesEqual               (const IM3FuncType i_typeA, const IM3FuncType i_typeB);
-
+u16         GetFuncTypeNumReturns           (const IM3FuncType i_funcType);
+u8          GetFuncTypeReturnType           (const IM3FuncType i_funcType, u16 i_index);
 
 //---------------------------------------------------------------------------------------------------------------------------------
 
@@ -59,20 +60,21 @@ typedef struct M3Function
 #endif
 
 # if d_m3EnableStrace >= 2 || d_m3LogCompile
-    u16                     index;
+    u32                     index;
 # endif
 
     u16                     maxStackSlots;
 
-    u16                     numArgSlots;
+    u16                     numRetSlots;
+    u16                     numRetAndArgSlots;
 
     u16                     numLocals;                              // not including args
     u16                     numLocalBytes;
 
-    void *                  constants;
-    u16                     numConstantBytes;
-
     bool                    ownsWasmCode;
+
+    u16                     numConstantBytes;
+    void *                  constants;
 }
 M3Function;
 
@@ -82,6 +84,8 @@ void        Function_FreeCompiledCode   (IM3Function i_function);
 cstr_t      GetFunctionImportModuleName (IM3Function i_function);
 cstr_t *    GetFunctionNames            (IM3Function i_function, u16 * o_numNames);
 u16         GetFunctionNumArgs          (IM3Function i_function);
+u8          GetFunctionArgType          (IM3Function i_function, u32 i_index);
+
 u16         GetFunctionNumReturns       (IM3Function i_function);
 u8          GetFunctionReturnType       (const IM3Function i_function, u16 i_index);
 

@@ -263,7 +263,7 @@ m3ApiRawFunction(CallImport)
     }
 
     for (Py_ssize_t i = 0; i < nArgs; ++i) {
-        PyObject *arg = get_arg_from_stack(&_sp[i], m3_GetArgType(f, i));
+        PyObject *arg = get_arg_from_stack(&_sp[i+nRets], m3_GetArgType(f, i));
         PyTuple_SET_ITEM(pArgs, i, arg);
     }
 

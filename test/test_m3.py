@@ -145,7 +145,7 @@ def test_dynamic_callback():
             # TODO: call by table index directly here
             assert dynCall_iii(fptr, 12, 34) == 408
         else:
-            raise Exception("Strange function ptr")
+            raise Exception(f"Strange function ptr: {fptr}")
 
     mod.link_function("env", "pass_fptr", "v(i)", pass_fptr)
 

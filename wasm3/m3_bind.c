@@ -52,14 +52,14 @@ _   (AllocFuncType (& funcType, (u32) maxNumTypes));
 
     u8 * typelist = funcType->types;
 
-    bool parsingArgs = false;
+    bool parsingRets = true;
     while (* sig)
     {
         char typeChar = * sig++;
 
         if (typeChar == '(')
         {
-            parsingArgs = true;
+            parsingRets = false;
             continue;
         }
         else if ( typeChar == ' ')
@@ -74,17 +74,17 @@ _   (AllocFuncType (& funcType, (u32) maxNumTypes));
         if (type == c_m3Type_none)
             continue;
 
-        if (not parsingArgs)
+        if (parsingRets)
         {
-            _throwif ("malformed function signature; too many return types", funcType->numRets >= 1);
-
-            d_FuncRetType(funcType, funcType->numRets++) = type;
+            _throwif ("malformed signature; return count overflow", funcType->numRets >= maxNumTypes);
+            funcType->numRets++;
+            *typelist++ = type;
         }
         else
         {
-            _throwif (m3Err_malformedFunctionSignature, funcType->numArgs >= maxNumTypes);  // forgot trailing ')' ?
-
-            d_FuncArgType(funcType, funcType->numArgs++) = type;
+            _throwif ("malformed signature; arg count overflow", funcType->numRets + funcType->numArgs >= maxNumTypes);
+            funcType->numArgs++;
+            *typelist++ = type;
         }
     }
 
