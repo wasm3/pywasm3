@@ -158,8 +158,14 @@ M3CodePageHeader;
 #define d_m3Reg0SlotAlias                   30000
 #define d_m3Fp0SlotAlias                    30001
 
+#define d_m3MaxSaneTypesCount               100000
+#define d_m3MaxSaneFunctionsCount           100000
+#define d_m3MaxSaneImportsCount             10000
+#define d_m3MaxSaneExportsCount             10000
+#define d_m3MaxSaneGlobalsCount             100000
+#define d_m3MaxSaneDataSegments             100000
 #define d_m3MaxSaneUtf8Length               2000
-#define d_m3MaxSaneFunctionArgCount         1000    // still insane, but whatever
+#define d_m3MaxSaneFunctionArgRetCount      1000    // still insane, but whatever
 
 #define d_externalKind_function             0
 #define d_externalKind_table                1
@@ -206,7 +212,6 @@ void *      m3_CopyMem              (const void * i_from, size_t i_size);
 #define     m3_AllocArray(STRUCT, NUM)              (STRUCT *)m3_Malloc (sizeof (STRUCT) * (NUM))
 #define     m3_ReallocArray(STRUCT, PTR, NEW, OLD)  (STRUCT *)m3_Realloc ((void *)(PTR), sizeof (STRUCT) * (NEW), sizeof (STRUCT) * (OLD))
 #define     m3_Free(P)                              do { m3_FreeImpl ((void*)(P)); (P) = NULL; } while(0)
-#define     _throwifnull(PTR)                       _throwif (m3Err_mallocFailed, !(PTR))
 
 M3Result    NormalizeType           (u8 * o_type, i8 i_convolutedWasmType);
 

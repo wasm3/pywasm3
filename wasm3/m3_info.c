@@ -26,6 +26,7 @@ void  m3_PrintM3Info  ()
 //  printf (" sizeof M3CodePage    : %zu bytes  (%d slots) \n", sizeof (M3CodePage), c_m3CodePageNumSlots);
     printf (" sizeof M3MemPage     : %u bytes              \n", d_m3MemPageSize);
     printf (" sizeof M3Compilation : %zu bytes             \n", sizeof (M3Compilation));
+    printf (" sizeof M3Function    : %zu bytes             \n", sizeof (M3Function));
     printf ("----------------------------------------------------------------\n\n");
 }
 
@@ -162,7 +163,7 @@ OpInfo find_operation_info  (IM3Operation i_operation)
     // TODO: find also extended opcodes
     for (u32 i = 0; i <= 0xff; ++i)
     {
-        IM3OpInfo oi = GetOpInfo(i);
+        IM3OpInfo oi = GetOpInfo (i);
 
         if (oi->type != c_m3Type_unknown)
         {
@@ -267,17 +268,12 @@ void  DecodeOperation  (char * o_string, u8 i_opcode, IM3Operation i_operation, 
     switch (i_opcode)
     {
 //        d_m3Decode (0xc0,                  Const)
-//        d_m3Decode (0xc1,                  Entry)
+        d_m3Decode (0xc5,                  Entry)
         d_m3Decode (c_waOp_call,           Call)
         d_m3Decode (c_waOp_branch,         Branch)
         d_m3Decode (c_waOp_branchTable,    BranchTable)
         d_m3Decode (0x39,                  f64_Store)
     }
-
-    #undef d_m3Decode
-    #define d_m3Decode(FUNC) if (i_operation == op_##FUNC) Decode_##FUNC (o_string, i_opcode, i_operation, i_opInfo, o_pc);
-
-    d_m3Decode (Entry)
 }
 
 // WARNING/TODO: this isn't fully implemented. it blindly assumes each word is a Operation pointer
@@ -342,7 +338,8 @@ void  dump_type_stack  (IM3Compilation o)
     printf ("                                                        ");
     printf ("%s %s    ", regAllocated [0] ? "(r0)" : "    ", regAllocated [1] ? "(fp0)" : "     ");
 
-    for (u32 i = o->firstDynamicStackIndex; i < o->stackIndex; ++i)
+//  printf ("%d", o->stackIndex -)
+    for (u32 i = o->stackFirstDynamicIndex; i < o->stackIndex; ++i)
     {
         printf (" %s", c_waCompactTypes [o->typeStack [i]]);
 
@@ -357,9 +354,9 @@ void  dump_type_stack  (IM3Compilation o)
         }
         else
         {
-            if (slot < o->firstDynamicSlotIndex)
+            if (slot < o->slotFirstDynamicIndex)
             {
-                if (slot >= o->firstConstSlotIndex)
+                if (slot >= o->slotFirstConstIndex)
                     printf ("c");
                 else if (slot >= o->function->numArgSlots)
                     printf ("L");

@@ -40,13 +40,17 @@ _try {
 
     cstr_t sig = i_signature;
 
-    int maxNumArgs = strlen (i_signature) - 2; // "()"
-    _throwif (m3Err_malformedFunctionSignature, maxNumArgs < 0);
-    _throwif ("insane argument count", maxNumArgs > d_m3MaxSaneFunctionArgCount);
+    size_t maxNumTypes = strlen (i_signature);
 
-    const u32 umaxNumArgs = (u32) maxNumArgs;
+    // assume min signature is "()"
+    _throwif (m3Err_malformedFunctionSignature, maxNumTypes < 2);
+    maxNumTypes -= 2;
 
-_   (AllocFuncType (& funcType, umaxNumArgs));
+    _throwif (m3Err_tooManyArgsRets, maxNumTypes > d_m3MaxSaneFunctionArgRetCount);
+
+_   (AllocFuncType (& funcType, (u32) maxNumTypes));
+
+    u8 * typelist = funcType->types;
 
     bool parsingArgs = false;
     while (* sig)
@@ -78,7 +82,7 @@ _   (AllocFuncType (& funcType, umaxNumArgs));
         }
         else
         {
-            _throwif (m3Err_malformedFunctionSignature, funcType->numArgs >= umaxNumArgs);  // forgot trailing ')' ?
+            _throwif (m3Err_malformedFunctionSignature, funcType->numArgs >= maxNumTypes);  // forgot trailing ')' ?
 
             d_FuncArgType(funcType, funcType->numArgs++) = type;
         }
