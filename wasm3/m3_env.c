@@ -372,7 +372,11 @@ M3Result  ResizeMemory  (IM3Runtime io_runtime, u32 i_numPages)
     {
         size_t numPageBytes = numPagesToAlloc * d_m3MemPageSize;
 
-        // Limit the amount of memory that gets allocated
+#if d_m3MaxLinearMemoryPages > 0
+        _throwif("linear memory limitation exceeded", numPagesToAlloc > d_m3MaxLinearMemoryPages);
+#endif
+
+        // Limit the amount of memory that gets actually allocated
         if (io_runtime->memoryLimit) {
             numPageBytes = M3_MIN (numPageBytes, io_runtime->memoryLimit);
         }
@@ -462,16 +466,15 @@ _       (EvaluateExpression (io_module, & segmentOffset, c_m3Type_i32, & start, 
 
         m3log (runtime, "loading data segment: %d; size: %d; offset: %d", i, segment->size, segmentOffset);
 
-        if (io_memory->mallocated)
+        _throwif ("unallocated linear memory", !(io_memory->mallocated));
+
+        if (segmentOffset > 0 && (size_t) segmentOffset + segment->size <= io_memory->mallocated->length)
         {
             u8 * dest = m3MemData (io_memory->mallocated) + segmentOffset;
-
-            if ((size_t) segmentOffset + segment->size <= io_memory->mallocated->length)
-                memcpy (dest, segment->data, segment->size);
-            else
-                _throw ("data segment overflowing linear memory");
+            memcpy (dest, segment->data, segment->size);
+        } else {
+            _throw ("data segment out of bounds");
         }
-        else _throw ("unallocated linear memory");
     }
 
     _catch: return result;
@@ -499,12 +502,12 @@ _           (EvaluateExpression (io_module, & offset, c_m3Type_i32, & bytes, end
             u32 numElements;
 _           (ReadLEB_u32 (& numElements, & bytes, end));
 
-            size_t endElement = numElements + offset;
+            size_t endElement = (size_t)(numElements) + offset;
+            _throwif ("table overflow", endElement > d_m3MaxSaneTableSize);
 
             io_module->table0 = m3_ReallocArray (IM3Function, io_module->table0, endElement, io_module->table0Size);
             _throwifnull(io_module->table0);
 
-            _throwif ("table overflow", endElement > UINT_MAX)
             io_module->table0Size = (u32) endElement;
 
             for (u32 e = 0; e < numElements; ++e)
