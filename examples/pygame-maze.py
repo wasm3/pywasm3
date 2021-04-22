@@ -50,6 +50,9 @@ k_right = False
 
 clock = pygame.time.Clock()
 
+prev_input = None
+prev_input_time = 0
+
 while True:
     # Process input
     for event in pygame.event.get():
@@ -72,6 +75,15 @@ while True:
     mem[1] = k_right
     mem[2] = k_up
     mem[3] = k_down
+    
+    # Stop rendering if no interaction for 10 seconds
+    inp = tuple(mem[0:3])
+    if inp != prev_input:
+        prev_input_time = time.time()
+    if time.time() - prev_input_time > 10:
+        clock.tick(60)
+        continue
+    prev_input = inp
 
     # Render next frame
     wasm_run()

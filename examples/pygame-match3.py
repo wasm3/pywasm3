@@ -43,6 +43,9 @@ k_duck = False
 
 clock = pygame.time.Clock()
 
+prev_input = None
+prev_input_time = 0
+
 while True:
     # Process input
     for event in pygame.event.get():
@@ -57,10 +60,18 @@ while True:
                 k_duck = (event.type == pygame.KEYDOWN)
 
     (mouse_x, mouse_y) = pygame.mouse.get_pos()
-    
     mem[0] = mouse_x // 4
     mem[1] = mouse_y // 4
     mem[2] = 1 if pygame.mouse.get_pressed()[0] else 0
+
+    # Stop rendering if no interaction for 10 seconds
+    inp = tuple(mem[0:3])
+    if inp != prev_input:
+        prev_input_time = time.time()
+    if time.time() - prev_input_time > 10:
+        clock.tick(60)
+        continue
+    prev_input = inp
 
     # Render next frame
     wasm_run()
