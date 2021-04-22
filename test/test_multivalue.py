@@ -14,7 +14,7 @@ MV_SWAP_WASM = wat2wasm("""
 
 MV_IMPORT_WASM = wat2wasm("""
 (module
-  (type $t0 (func (param i32 i32) (result i32 i32)))
+  (type $t0 (func (param i32 i64) (result i64 i32)))
   (import "env" "swap" (func $env.swap (type $t0)))
   (func (export "swap") (type $t0)
     (get_local 0)
@@ -40,7 +40,7 @@ def test_multivalue_imported():
     rt = env.new_runtime(64)
     mod = env.parse_module(MV_IMPORT_WASM)
     rt.load(mod)
-    mod.link_function("env", "swap", "ii(ii)", lambda a,b: (b,a))
+    mod.link_function("env", "swap", "Ii(iI)", lambda a,b: (b,a))
     swap = rt.find_function('swap')
     assert swap(1, 2) == (2, 1)
     assert swap(2, 1) == (1, 2)

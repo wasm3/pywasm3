@@ -38,9 +38,6 @@ surface = pygame.display.set_mode(scr_size)
 pygame.display.set_caption("Wasm3 Match3")
 white = (255, 255, 255)
 
-k_jump = False
-k_duck = False
-
 clock = pygame.time.Clock()
 
 prev_input = None
@@ -53,11 +50,6 @@ while True:
             (event.type == pygame.KEYDOWN and event.key == pygame.K_ESCAPE)):
             pygame.quit()
             quit()
-        elif event.type == pygame.KEYDOWN or event.type == pygame.KEYUP:
-            if event.key == pygame.K_UP:
-                k_jump = (event.type == pygame.KEYDOWN)
-            elif event.key == pygame.K_DOWN:
-                k_duck = (event.type == pygame.KEYDOWN)
 
     (mouse_x, mouse_y) = pygame.mouse.get_pos()
     mem[0] = mouse_x // 4
