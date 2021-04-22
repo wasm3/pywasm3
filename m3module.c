@@ -411,11 +411,6 @@ get_result_from_stack(m3_function *func)
         Py_RETURN_NONE;
     }
     
-    if (nRets > 1) {
-        PyErr_SetString(PyExc_NotImplementedError, "multi-value not supported yet");
-        return NULL;
-    }
-    
     if (nRets > MAX_ARGS) {
         PyErr_SetString(PyExc_RuntimeError, "too many rets");
         return NULL;
@@ -434,7 +429,19 @@ get_result_from_stack(m3_function *func)
         return formatError(PyExc_RuntimeError, func->r, err);
     }
 
-    return get_arg_from_stack(valptrs[0], m3_GetRetType(func->f, 0));
+    if (nRets == 1) {
+        return get_arg_from_stack(valptrs[0], m3_GetRetType(func->f, 0));
+    } else {
+        PyObject *ret = PyTuple_New(nRets);
+        if (ret) {
+            Py_ssize_t i;
+            for (i = 0; i < nRets; ++i) {
+                PyObject *val = get_arg_from_stack(valptrs[i], m3_GetRetType(func->f, i));
+                PyTuple_SET_ITEM(ret, i, val);
+            }
+        }
+        return ret;
+    }
 }
 
 static
@@ -471,7 +478,12 @@ M3_Function_call_argv(m3_function *func, PyObject *args)
     Py_ssize_t size = PyTuple_GET_SIZE(args);
     const char* argv[MAX_ARGS];
     for(Py_ssize_t i = 0; i< size;++i) {
-        argv[i] = PyUnicode_AsUTF8(PyTuple_GET_ITEM(args, i));
+        PyObject *arg = PyTuple_GET_ITEM(args, i);
+        if (!PyUnicode_Check(arg)) {
+            PyErr_SetString(PyExc_RuntimeError, "all arguments should be strings");
+            return NULL;
+        }
+        argv[i] = PyUnicode_AsUTF8(arg);
     }
     M3Result err = m3_CallArgv(func->f, size, argv);
     if (err == trapException) {
