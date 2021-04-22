@@ -155,8 +155,8 @@ M3CodePageHeader;
 
 #define d_m3MemPageSize                     65536
 
-#define d_m3Reg0SlotAlias                   30000
-#define d_m3Fp0SlotAlias                    30001
+#define d_m3Reg0SlotAlias                   60000
+#define d_m3Fp0SlotAlias                    (d_m3Reg0SlotAlias + 2)
 
 #define d_m3MaxSaneTypesCount               100000
 #define d_m3MaxSaneFunctionsCount           100000
@@ -240,7 +240,8 @@ M3Result    ReadLEB_i32             (i32 * o_value, bytes_t * io_bytes, cbytes_t
 M3Result    ReadLEB_i64             (i64 * o_value, bytes_t * io_bytes, cbytes_t i_end);
 M3Result    Read_utf8               (cstr_t * o_utf8, bytes_t * io_bytes, cbytes_t i_end);
 
-size_t      SPrintArg               (char * o_string, size_t i_n, m3stack_t i_sp, u8 i_type);
+cstr_t      SPrintValue             (void * i_value, u8 i_type);
+size_t      SPrintArg               (char * o_string, size_t i_stringBufferSize, m3stack_t i_sp, u8 i_type);
 
 void        ReportError             (IM3Runtime io_runtime, IM3Module i_module, IM3Function i_function, ccstr_t i_errorMessage, ccstr_t i_file, u32 i_lineNum);
 

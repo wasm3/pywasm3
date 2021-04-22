@@ -127,6 +127,8 @@ _   (ReadLEB_u32 (& numFunctions, & i_bytes, i_end));                           
 
     _throwif("too many functions", numFunctions > d_m3MaxSaneFunctionsCount);
 
+    // TODO: prealloc functions
+
     for (u32 i = 0; i < numFunctions; ++i)
     {
         u32 funcTypeIndex;
@@ -168,7 +170,7 @@ _               (ReadLEB_u32 (& typeIndex, & i_bytes, i_end))
 _               (Module_AddFunction (io_module, typeIndex, & import))
                 import = clearImport;
 
-                io_module->numImports++;
+                io_module->numFuncImports++;
             }
             break;
 
@@ -236,18 +238,19 @@ _       (ReadLEB_u32 (& index, & i_bytes, i_end));                              
         if (exportKind == d_externalKind_function)
         {
             _throwif(m3Err_wasmMalformed, index >= io_module->numFunctions);
-            u16 numNames = io_module->functions [index].numNames;
-            if (numNames < d_m3MaxDuplicateFunctionImpl)
+            IM3Function func = &(io_module->functions [index]);
+            if (func->numNames < d_m3MaxDuplicateFunctionImpl)
             {
-                io_module->functions [index].numNames++;
-                io_module->functions [index].names[numNames] = utf8;
+                func->names[func->numNames++] = utf8;
                 utf8 = NULL; // ownership transferred to M3Function
             }
         }
         else if (exportKind == d_externalKind_global)
         {
             _throwif(m3Err_wasmMalformed, index >= io_module->numGlobals);
-            io_module->globals[index].name = utf8;
+            IM3Global global = &(io_module->globals [index]);
+            m3_Free (global->name);
+            global->name = utf8;
             utf8 = NULL; // ownership transferred to M3Global
         }
 
@@ -290,7 +293,7 @@ M3Result  Parse_InitExpr  (M3Module * io_module, bytes_t * io_bytes, cbytes_t i_
 #endif
     compilation = (M3Compilation){ NULL, io_module, * io_bytes, i_end };
 
-    result = Compile_BlockStatements (& compilation);
+    result = CompileBlockStatements (& compilation);
 
     * io_bytes = compilation.wasm;
 
@@ -324,7 +327,7 @@ M3Result  ParseSection_Code  (M3Module * io_module, bytes_t i_bytes, cbytes_t i_
     u32 numFunctions;
 _   (ReadLEB_u32 (& numFunctions, & i_bytes, i_end));                               m3log (parse, "** Code [%d]", numFunctions);
 
-    if (numFunctions != io_module->numFunctions - io_module->numImports)
+    if (numFunctions != io_module->numFunctions - io_module->numFuncImports)
     {
         _throw ("mismatched function count in code section");
     }
@@ -361,7 +364,7 @@ _                   (NormalizeType (& normalType, wasmType));
                     numLocals += varCount;                                                      m3log (parse, "      %2d locals; type: '%s'", varCount, c_waTypes [normalType]);
                 }
 
-                IM3Function func = Module_GetFunction (io_module, f + io_module->numImports);
+                IM3Function func = Module_GetFunction (io_module, f + io_module->numFuncImports);
 
                 func->module = io_module;
                 func->wasm = start;
@@ -411,6 +414,8 @@ _       (ReadLEB_u32 (& segment->size, & i_bytes, i_end));
         segment->data = i_bytes;                                                    m3log (parse, "    segment [%u]  memory: %u;  expr-size: %d;  size: %d",
                                                                                        i, segment->memoryRegion, segment->initExprSize, segment->size);
         i_bytes += segment->size;
+
+        _throwif("data segment underflow", i_bytes > i_end);
     }
 
     _catch:
@@ -504,10 +509,11 @@ _               (Read_utf8 (& name, & i_bytes, i_end));
 
                 if (index < io_module->numFunctions)
                 {
-                    if (io_module->functions [index].numNames == 0)
+                    IM3Function func = &(io_module->functions [index]);
+                    if (func->numNames == 0)
                     {
-                        io_module->functions [index].numNames = 1;
-                        io_module->functions [index].names[0] = name;        m3log (parse, "    naming function%5d:  %s", index, name);
+                        func->names[0] = name;        m3log (parse, "    naming function%5d:  %s", index, name);
+                        func->numNames = 1;
                         name = NULL; // transfer ownership
                     }
 //                          else m3log (parse, "prenamed: %s", io_module->functions [index].name);
@@ -591,33 +597,32 @@ _   (Read_u32 (& version, & pos, end));
 
     _throwif (m3Err_wasmMalformed, magic != 0x6d736100);
     _throwif (m3Err_incompatibleWasmVersion, version != 1);
-                                                                                    m3log (parse,  "found magic + version");
-    u8 previousSection = 0;
+
+    static const u8 sectionsOrder[] = { 1, 2, 3, 4, 5, 6, 7, 8, 9, 12, 10, 11, 0 }; // 0 is a placeholder
+    u8 expectedSection = 0;
 
     while (pos < end)
     {
         u8 section;
 _       (ReadLEB_u7 (& section, & pos, end));
 
-        if (section > previousSection or                    // from the spec: sections must appear in order
-            section == 0 or                                 // custom section
-            (section == 12 and previousSection == 9) or     // if present, DataCount goes after Element
-            (section == 10 and previousSection == 12))      // and before Code
-        {
-            u32 sectionLength;
-_           (ReadLEB_u32 (& sectionLength, & pos, end));
-            _throwif(m3Err_wasmMalformed, pos + sectionLength > end);
-_           (ParseModuleSection (module, section, pos, sectionLength));
-
-            pos += sectionLength;
-
-            if (section)
-                previousSection = section;
+        if (section != 0) {
+            // Ensure sections appear only once and in order
+            while (sectionsOrder[expectedSection++] != section) {
+                _throwif(m3Err_misorderedWasmSection, expectedSection >= 12);
+            }
         }
-        else _throw (m3Err_misorderedWasmSection);
+
+        u32 sectionLength;
+_       (ReadLEB_u32 (& sectionLength, & pos, end));
+        _throwif(m3Err_wasmMalformed, pos + sectionLength > end);
+
+_       (ParseModuleSection (module, section, pos, sectionLength));
+
+        pos += sectionLength;
     }
 
-    } _catch:
+} _catch:
 
     if (result)
     {

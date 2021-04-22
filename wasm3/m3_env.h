@@ -89,9 +89,7 @@ typedef struct M3Module
     u32                     numFuncTypes;
     IM3FuncType *           funcTypes;              // array of pointers to list of FuncTypes
 
-    u32                     numImports;
-    //IM3Function *           imports;   b          // notice: "I" prefix. imports are pointers to functions in another module.
-
+    u32                     numFuncImports;
     u32                     numFunctions;
     M3Function *            functions;
 
@@ -124,6 +122,8 @@ M3Result                    Module_AddGlobal            (IM3Module io_module, IM
 
 M3Result                    Module_AddFunction          (IM3Module io_module, u32 i_typeIndex, IM3ImportInfo i_importInfo /* can be null */);
 IM3Function                 Module_GetFunction          (IM3Module i_module, u32 i_functionIndex);
+
+void                        Module_GenerateNames        (IM3Module i_module);
 
 void                        FreeImportInfo              (M3ImportInfo * i_info);
 

@@ -13,6 +13,14 @@
 
 #ifdef DEBUG
 
+// a central function you can be breakpoint:
+void ExceptionBreakpoint (cstr_t i_exception, cstr_t i_message)
+{
+    printf ("\nexception: '%s' @ %s\n", i_exception, i_message);
+    return;
+}
+
+
 typedef struct OpInfo
 {
     IM3OpInfo   info;
@@ -61,6 +69,9 @@ cstr_t  GetTypeName  (u8 i_m3Type)
 }
 
 
+// TODO: these 'static char string []' aren't thread-friendly.  though these functions are
+// mainly for simple diagnostics during development, it'd be nice if they were fully reliable.
+
 cstr_t  SPrintFuncTypeSignature  (IM3FuncType i_funcType)
 {
     static char string [256];
@@ -89,26 +100,34 @@ cstr_t  SPrintFuncTypeSignature  (IM3FuncType i_funcType)
 }
 
 
-size_t  SPrintArg  (char * o_string, size_t i_n, m3stack_t i_sp, u8 i_type)
+size_t  SPrintArg  (char * o_string, size_t i_stringBufferSize, m3stack_t i_sp, u8 i_type)
 {
     int len = 0;
 
     * o_string = 0;
 
     if      (i_type == c_m3Type_i32)
-        len = snprintf (o_string, i_n, "%" PRIi32, * (i32 *) i_sp);
+        len = snprintf (o_string, i_stringBufferSize, "%" PRIi32, * (i32 *) i_sp);
     else if (i_type == c_m3Type_i64)
-        len = snprintf (o_string, i_n, "%" PRIi64, * (i64 *) i_sp);
+        len = snprintf (o_string, i_stringBufferSize, "%" PRIi64, * (i64 *) i_sp);
 #if d_m3HasFloat
     else if (i_type == c_m3Type_f32)
-        len = snprintf (o_string, i_n, "%" PRIf32, * (f32 *) i_sp);
+        len = snprintf (o_string, i_stringBufferSize, "%" PRIf32, * (f32 *) i_sp);
     else if (i_type == c_m3Type_f64)
-        len = snprintf (o_string, i_n, "%" PRIf64, * (f64 *) i_sp);
+        len = snprintf (o_string, i_stringBufferSize, "%" PRIf64, * (f64 *) i_sp);
 #endif
 
     len = M3_MAX (0, len);
 
     return len;
+}
+
+
+cstr_t  SPrintValue  (void * i_value, u8 i_type)
+{
+    static char string [100];
+    SPrintArg (string, 100, (m3stack_t) i_value, i_type);
+    return string;
 }
 
 
@@ -231,24 +250,20 @@ d_m3Decoder  (BranchTable)
 {
     u32 slot = fetch (u32);
 
-    sprintf (o_string, "slot: %" PRIu32 "; targets: ", slot);
+    o_string += sprintf (o_string, "slot: %" PRIu32 "; targets: ", slot);
 
 //    IM3Function function = fetch2 (IM3Function);
 
     i32 targets = fetch (i32);
 
-    char str [1000];
-
     for (i32 i = 0; i < targets; ++i)
     {
         pc_t addr = fetch (pc_t);
-        sprintf (str, "%" PRIi32 "=%p, ", i, addr);
-        strcat (o_string, str);
+        o_string += sprintf (o_string, "%" PRIi32 "=%p, ", i, addr);
     }
 
     pc_t addr = fetch (pc_t);
-    sprintf (str, "def=%p ", addr);
-    strcat (o_string, str);
+    sprintf (o_string, "def=%p ", addr);
 }
 
 
@@ -296,7 +311,7 @@ void  dump_code_page  (IM3CodePage i_codePage, pc_t i_startPC)
 
                 if (i.info)
                 {
-                    char infoString [1000] = { 0 };
+                    char infoString [8*1024] = { 0 };
 
                     DecodeOperation (infoString, i.opcode, op, i.info, & pc);
 
@@ -334,45 +349,102 @@ void  dump_type_stack  (IM3Compilation o)
     i32 regAllocated [2] = { (i32) IsRegisterAllocated (o, 0), (i32) IsRegisterAllocated (o, 1) };
 
     // display whether r0 or fp0 is allocated. these should then also be reflected somewhere in the stack too.
-    d_m3Log(stack, "");
-    printf ("                                                        ");
+    d_m3Log(stack, "\n");
+    d_m3Log(stack, "        ");
     printf ("%s %s    ", regAllocated [0] ? "(r0)" : "    ", regAllocated [1] ? "(fp0)" : "     ");
+    printf("\n");
 
-//  printf ("%d", o->stackIndex -)
-    for (u32 i = o->stackFirstDynamicIndex; i < o->stackIndex; ++i)
+    for (u32 p = 1; p <= 2; ++p)
     {
-        printf (" %s", c_waCompactTypes [o->typeStack [i]]);
+        d_m3Log(stack, "        ");
 
-        u16 slot = o->wasmStack [i];
-
-        if (IsRegisterLocation (slot))
+        for (u32 i = 0; i < o->stackIndex; ++i)
         {
-            bool isFp = IsFpRegisterLocation (slot);
-            printf ("%s", isFp ? "f0" : "r0");
+            if (i > 0 and i == o->stackFirstDynamicIndex)
+                printf ("#");
 
-            regAllocated [isFp]--;
-        }
-        else
-        {
-            if (slot < o->slotFirstDynamicIndex)
+            if (i == o->block.blockStackIndex)
+                printf (">");
+
+            const char * type = c_waCompactTypes [o->typeStack [i]];
+
+            const char * location = "";
+
+            i32 slot = o->wasmStack [i];
+
+            if (IsRegisterSlotAlias (slot))
             {
-                if (slot >= o->slotFirstConstIndex)
-                    printf ("c");
-                else if (slot >= o->function->numRetAndArgSlots)
-                    printf ("L");
-                else
-                    printf ("a");
+                bool isFp = IsFpRegisterSlotAlias (slot);
+                location = isFp ? "/f" : "/r";
+
+                regAllocated [isFp]--;
+                slot = -1;
+            }
+            else
+            {
+                if (slot < o->slotFirstDynamicIndex)
+                {
+                    if (slot >= o->slotFirstConstIndex)
+                        location = "c";
+                    else if (slot >= o->function->numRetAndArgSlots)
+                        location = "L";
+                    else
+                        location = "a";
+                }
             }
 
-            printf ("%d", (i32) slot);  // slot
+            char item [100];
+
+            if (slot >= 0)
+                sprintf (item, "%s%s%d", type, location, slot);
+            else
+                sprintf (item, "%s%s", type, location);
+
+            if (p == 1)
+            {
+                size_t s = strlen (item);
+
+                sprintf (item, "%d", i);
+
+                while (strlen (item) < s)
+                    strcat (item, " ");
+            }
+
+            printf ("|%s ", item);
+
+        }
+        printf ("\n");
+    }
+
+//    for (u32 r = 0; r < 2; ++r)
+//        d_m3Assert (regAllocated [r] == 0);         // reg allocation & stack out of sync
+
+    u16 maxSlot = GetMaxUsedSlotPlusOne (o);
+
+    if (maxSlot > o->slotFirstDynamicIndex)
+    {
+        d_m3Log (stack, "                      -");
+
+        for (u16 i = o->slotFirstDynamicIndex; i < maxSlot; ++i)
+            printf ("----");
+
+        printf ("\n");
+
+        d_m3Log (stack, "                 slot |");
+        for (u16 i = o->slotFirstDynamicIndex; i < maxSlot; ++i)
+            printf ("%3d|", i);
+
+        printf ("\n");
+        d_m3Log (stack, "                alloc |");
+
+        for (u16 i = o->slotFirstDynamicIndex; i < maxSlot; ++i)
+        {
+            printf ("%3d|", o->m3Slots [i]);
         }
 
-        printf (" ");
+        printf ("\n");
     }
-    printf ("\n");
-
-    for (u32 r = 0; r < 2; ++r)
-        d_m3Assert (regAllocated [r] == 0);         // reg allocation & stack out of sync
+    d_m3Log(stack, "\n");
 }
 
 

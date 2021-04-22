@@ -29,8 +29,12 @@ typedef M3FuncType *        IM3FuncType;
 
 M3Result    AllocFuncType                   (IM3FuncType * o_functionType, u32 i_numTypes);
 bool        AreFuncTypesEqual               (const IM3FuncType i_typeA, const IM3FuncType i_typeB);
-u16         GetFuncTypeNumReturns           (const IM3FuncType i_funcType);
-u8          GetFuncTypeReturnType           (const IM3FuncType i_funcType, u16 i_index);
+
+u16         GetFuncTypeNumParams            (const IM3FuncType i_funcType);
+u8          GetFuncTypeParamType            (const IM3FuncType i_funcType, u16 i_index);
+
+u16         GetFuncTypeNumResults           (const IM3FuncType i_funcType);
+u8          GetFuncTypeResultType           (const IM3FuncType i_funcType, u16 i_index);
 
 //---------------------------------------------------------------------------------------------------------------------------------
 
@@ -55,13 +59,10 @@ typedef struct M3Function
     u32                     numCodePageRefs;
 #endif
 
-#if defined(DEBUG)
+#if defined (DEBUG)
     u32                     hits;
-#endif
-
-# if d_m3EnableStrace >= 2 || d_m3LogCompile
     u32                     index;
-# endif
+#endif
 
     u16                     maxStackSlots;
 
