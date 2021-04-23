@@ -10,10 +10,9 @@ os.environ['PYGAME_HIDE_SUPPORT_PROMPT'] = "true"
 # Set to 44100 for better quality, or 11025 for faster computation
 sample_rate = 22050
 
-duration = 164000
 buffersize = 128*4
 
-prebuffer = 1024
+prebuffer = 256
 
 def draw(c):
     print(c, end='', flush=True)
@@ -40,9 +39,8 @@ def player(q):
 
 if __name__ == '__main__':
 
-    print("WebAssembly Music by Peter Salomonsen - from the executable music competition at Revision demoparty 2021")
-    print("Source:      https://petersalomonsen.com/webassemblymusic/livecodev2/?gist=d71387112368a2692dc1d84c0ab5b1d2")
-    print("Synthesized: https://soundcloud.com/psalomo/webassembly-music-entry-for-the-revision-2021-executable-music-competition")
+    print("WebAssembly Summit 2021 theme - by Peter Salomonsen")
+    print("Source:      https://petersalomonsen.com/webassemblymusic/livecodev2/?gitrepo=wasmsummit2")
     print()
 
     q = mp.Queue()
@@ -50,7 +48,7 @@ if __name__ == '__main__':
     p.start()
 
     scriptpath = os.path.dirname(os.path.realpath(__file__))
-    wasm_fn = os.path.join(scriptpath, f"./wasm/music.wasm")
+    wasm_fn = os.path.join(scriptpath, f"./wasm/wasmsummit2.wasm")
 
     # Prepare Wasm3 engine
 
@@ -64,6 +62,7 @@ if __name__ == '__main__':
 
     wasm_play = rt.find_function("playEventsAndFillSampleBuffer")
 
+    duration = rt.find_function("getDuration")()
 
     samplebufferL = mod.get_global("samplebuffer")
     samplebufferR = samplebufferL + buffersize
