@@ -55,7 +55,7 @@ m3ApiRawFunction(metering_usegas)
 static m3_environment*
 newEnvironment(PyObject *arg)
 {
-    m3_environment *self = PyObject_GC_New(m3_environment, (PyTypeObject*)M3_Environment_Type);
+    m3_environment *self = PyObject_New(m3_environment, (PyTypeObject*)M3_Environment_Type);
     if (!self) return NULL;
     self->e = m3_NewEnvironment();
     return self;    
@@ -109,7 +109,7 @@ static PyObject *
 M3_Environment_new_runtime(m3_environment *env, PyObject *stack_size_bytes)
 {
     size_t n = PyLong_AsSize_t(stack_size_bytes);
-    m3_runtime *self = PyObject_GC_New(m3_runtime, (PyTypeObject*)M3_Runtime_Type);
+    m3_runtime *self = PyObject_New(m3_runtime, (PyTypeObject*)M3_Runtime_Type);
     if (!self) return NULL;
     Py_INCREF(env);
     self->env = env;
@@ -131,7 +131,7 @@ M3_Environment_parse_module(m3_environment *env, PyObject *bytes)
     }
     Py_INCREF(bytes);
 
-    m3_module *self = PyObject_GC_New(m3_module, (PyTypeObject*)M3_Module_Type);
+    m3_module *self = PyObject_New(m3_module, (PyTypeObject*)M3_Module_Type);
     if (!self) return NULL;
     Py_INCREF(env);
     self->env = env;
@@ -184,8 +184,9 @@ M3_Runtime_find_function(m3_runtime *runtime, PyObject *name)
     if (err) {
         return formatError(PyExc_RuntimeError, runtime->r, err);
     }
-    m3_function *self = PyObject_GC_New(m3_function, (PyTypeObject*)M3_Function_Type);
+    m3_function *self = PyObject_New(m3_function, (PyTypeObject*)M3_Function_Type);
     if (!self) return NULL;
+	Py_INCREF(runtime);
     self->f = func;
     self->r = runtime->r;
     return self;
@@ -605,7 +606,7 @@ static PyType_Spec M3_Environment_Type_spec = {
     "wasm3.Environment",
     sizeof(m3_environment),
     0,
-    Py_TPFLAGS_DEFAULT | Py_TPFLAGS_HAVE_GC,
+    Py_TPFLAGS_DEFAULT | Py_TPFLAGS_BASETYPE,
     M3_Environment_Type_slots
 };
 
@@ -613,7 +614,7 @@ static PyType_Spec M3_Runtime_Type_spec = {
     "wasm3.Runtime",
     sizeof(m3_runtime),
     0,
-    Py_TPFLAGS_DEFAULT | Py_TPFLAGS_HAVE_GC,
+    Py_TPFLAGS_DEFAULT | Py_TPFLAGS_BASETYPE,
     M3_Runtime_Type_slots
 };
 
@@ -621,7 +622,7 @@ static PyType_Spec M3_Module_Type_spec = {
     "wasm3.Module",
     sizeof(m3_module),
     0,
-    Py_TPFLAGS_DEFAULT | Py_TPFLAGS_HAVE_GC,
+    Py_TPFLAGS_DEFAULT | Py_TPFLAGS_BASETYPE,
     M3_Module_Type_slots
 };
 
@@ -629,7 +630,7 @@ static PyType_Spec M3_Function_Type_spec = {
     "wasm3.Function",
     sizeof(m3_function),
     0,
-    Py_TPFLAGS_DEFAULT | Py_TPFLAGS_HAVE_GC,
+    Py_TPFLAGS_DEFAULT | Py_TPFLAGS_BASETYPE,
     M3_Function_Type_slots
 };
 
