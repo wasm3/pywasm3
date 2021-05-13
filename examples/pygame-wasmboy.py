@@ -3,19 +3,27 @@
 import os, struct, time
 import wasm3
 import numpy
+import urllib.request
 from enum import Enum
 
 os.environ['PYGAME_HIDE_SUPPORT_PROMPT'] = "true"
 
 import pygame
 
-rom_fn = "tobudx.gb"
-rom_f = open(rom_fn, "rb")
+#rom_fn = "tobudx.gbc"
+rom_fn = ""
 
 if __name__ == '__main__':
 
-    print("WasmerBoy by Aaron Turner (torch2424)")
+    print("WasmBoy by Aaron Turner (torch2424)")
     print()
+
+    if rom_fn:
+        rom_f = open(rom_fn, "rb")
+        rom_size = os.path.getsize(rom_fn)
+    else:
+        rom_f = urllib.request.urlopen('https://github.com/AntonioND/back-to-color/raw/master/demo.gbc')
+        rom_size = int(rom_f.headers['content-length'])
 
     scriptpath = os.path.dirname(os.path.realpath(__file__))
     wasm_fn = os.path.join(scriptpath, f"./wasm/wasmerboy.wasm")
@@ -49,7 +57,7 @@ if __name__ == '__main__':
         global img
         # Convert BGRX to RGBX
         arr = numpy.frombuffer(data, dtype=numpy.uint8)
-        arr = arr.reshape((img_w*img_h, 4))[...,[2,1,0,3]]
+        arr = arr.reshape((img_w*img_h, 4))[..., [2,1,0,3]]
         data = arr.astype(numpy.uint8).tobytes()
         img = pygame.image.frombuffer(data, img_size, "RGBX")
 
@@ -91,11 +99,20 @@ if __name__ == '__main__':
         END = 1
         SET = 2
 
+    class WasiErrno(Enum):
+        SUCCESS = 0
+        ACCES   = 2
+        AGAIN   = 6
+        ALREADY = 7
+        BADF    = 8
+        BUSY    = 10
+        INVAL   = 28
+
     vfs = {
         "rom": {
             "fd":   1000,
             "type": FileType.REG,
-            "size": os.path.getsize(rom_fn),
+            "size": rom_size,
             "read": virtual_rom_read,
         },
         "_wasmer/dev/fb0/virtual_size": {
@@ -131,13 +148,13 @@ if __name__ == '__main__':
         mem = rt.get_memory(0)
         struct.pack_into("<I", mem, argc,   2)
         struct.pack_into("<I", mem, buf_sz, 32)
-        return 0
+        return WasiErrno.SUCCESS.value
 
     def args_get(argv, buf):
         mem = rt.get_memory(0)
         struct.pack_into("<II", mem, argv, buf, buf+8)
         struct.pack_into("8s4s", mem, buf, b"wasmboy\0", b"rom\0")
-        return 0
+        return WasiErrno.SUCCESS.value
 
     def path_filestat_get(fd, flags, path, path_len, buff):
         mem = rt.get_memory(0)
@@ -146,7 +163,7 @@ if __name__ == '__main__':
         f = vfs[path]
         struct.pack_into("<QQBxxxIQQQQ", mem, buff, 1, 1, f["type"].value, 1, f["size"], 0, 0 , 0)
 
-        return 0
+        return WasiErrno.SUCCESS.value
 
     def path_open(dirfd, dirflags, path, path_len, oflags, fs_rights_base, fs_rights_inheriting, fs_flags, fd):
         mem = rt.get_memory(0)
@@ -156,11 +173,13 @@ if __name__ == '__main__':
         struct.pack_into("<I", mem, fd, fd_val)
 
         #print("path_open:", f"{dirfd}:{path} => {fd_val}")
-        return 0
+        return WasiErrno.SUCCESS.value
 
     def fd_seek(fd, offset, whence, result):
+        mem = rt.get_memory(0)
         #print("fd_seek:", f"{fd} {FilePos(whence)}:{offset}")
-        return 0
+        struct.pack_into("<Q", mem, result, 0)
+        return WasiErrno.SUCCESS.value
 
     def fd_read(fd, iovs, iovs_len, nread):
         mem = rt.get_memory(0)
@@ -184,12 +203,11 @@ if __name__ == '__main__':
                 data_off += len(d)
 
             struct.pack_into("<I", mem, nread, data_off)
-
         else:
             print(f"Cannot read fd: {fd}")
+            return WasiErrno.BADF.value
 
-        return 0
-
+        return WasiErrno.SUCCESS.value
 
     def fd_write(fd, iovs, iovs_len, nwritten):
         mem = rt.get_memory(0)
@@ -207,15 +225,19 @@ if __name__ == '__main__':
             vfs_fds[fd]["write"](data)
         else:
             print(f"Cannot write fd: {fd}")
+            return WasiErrno.BADF.value
 
-        return 0
+        return WasiErrno.SUCCESS.value
 
     def clock_time_get(clk_id, precision, result):
-        return 0
+        mem = rt.get_memory(0)
+        struct.pack_into("<Q", mem, result, 0)
+        return WasiErrno.SUCCESS.value
 
     def poll_oneoff(ev_in, ev_out, subs, evts):
+        mem = rt.get_memory(0)
         clock.tick(60)
-        return 0
+        return WasiErrno.SUCCESS.value
 
     for modname in ["wasi_unstable", "wasi_snapshot_preview1"]:
         mod.link_function(modname, "args_get",              "i(**)",        args_get)
