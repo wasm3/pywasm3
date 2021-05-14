@@ -59,12 +59,12 @@ if __name__ == '__main__':
     buff = b''
     buff_sz = prebuffer
 
-    def fd_write(fd, wasi_iovs, iows_len, nwritten):
+    def fd_write(fd, iovs, iovs_len, nwritten):
         global buff, buff_sz
         mem = rt.get_memory(0)
 
         # get data
-        (off, size) = struct.unpack("<II", mem[wasi_iovs:wasi_iovs+8])
+        (off, size) = struct.unpack("<II", mem[iovs:iovs+8])
         data = mem[off:off+size]
 
         # decode
@@ -89,7 +89,7 @@ if __name__ == '__main__':
             buff = b''
             time.sleep(0.01)
 
-        return size
+        return 0
 
     for modname in ["wasi_unstable", "wasi_snapshot_preview1"]:
         mod.link_function(modname, "fd_write", "i(i*i*)", fd_write)
