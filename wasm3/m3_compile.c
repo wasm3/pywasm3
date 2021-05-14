@@ -814,7 +814,6 @@ M3Result  CopyStackTopToRegister  (IM3Compilation o, bool i_updateStack)
     {
         u8 type = GetStackTopType (o);
 
-        if (i_updateStack)
 _       (PreserveRegisterIfOccupied (o, type));
 
         IM3Operation op = c_setRegisterOps [type];
@@ -892,7 +891,7 @@ M3Result  GetBlockScope  (IM3Compilation o, IM3CompilationScope * o_scope, i32 i
 }
 
 
-M3Result  MoveStackSlotsR  (IM3Compilation o, u16 i_targetSlotStackIndex, u16 i_stackIndex, u16 i_endStackIndex, u16 i_tempSlot)
+M3Result  CopyStackSlotsR  (IM3Compilation o, u16 i_targetSlotStackIndex, u16 i_stackIndex, u16 i_endStackIndex, u16 i_tempSlot)
 {
     M3Result result = m3Err_none;
 
@@ -944,7 +943,7 @@ _           (CopyStackIndexToSlot (o, targetSlot, i_stackIndex));               
 
         }
 
-_       (MoveStackSlotsR (o, i_targetSlotStackIndex + 1, i_stackIndex + 1, i_endStackIndex, i_tempSlot));
+_       (CopyStackSlotsR (o, i_targetSlotStackIndex + 1, i_stackIndex + 1, i_endStackIndex, i_tempSlot));
 
         // restore the stack state
         o->wasmStack [i_stackIndex] = srcSlot;
@@ -994,7 +993,7 @@ _           (CopyStackTopToRegister (o, false));
         u16 tempSlot = o->maxStackSlots;// GetMaxUsedSlotPlusOne (o); doesn't work cause can collide with slotRecords
         AlignSlotToType (& tempSlot, c_m3Type_i64);
 
-_       (MoveStackSlotsR (o, slotRecords, endIndex - numValues, endIndex, tempSlot));
+_       (CopyStackSlotsR (o, slotRecords, endIndex - numValues, endIndex, tempSlot));
 
         if (d_m3LogWasmStack) dump_type_stack (o);
     }
@@ -1074,7 +1073,7 @@ _   (PushConst (o, value, c_m3Type_i64));                       m3log (compile, 
 }
 
 
-#if d_m3HasFloat
+#if d_m3ImplementFloat
 M3Result  Compile_Const_f32  (IM3Compilation o, m3opcode_t i_opcode)
 {
     M3Result result;
@@ -1101,12 +1100,13 @@ _   (PushConst (o, value.u, c_m3Type_f64));
 }
 #endif
 
-#ifdef d_m3CompileExtendedOpcode
+#ifdef d_m3EnableExtendedOpcodes
 
 M3Result  Compile_ExtendedOpcode  (IM3Compilation o, m3opcode_t i_opcode)
 {
-    M3Result result;
+    M3Result result = m3Err_none;
 
+_try {
     u8 opcode;
 _   (Read_u8 (& opcode, & o->wasm, o->wasmEnd));             m3log (compile, d_indent " (FC: %" PRIi32 ")", get_indention_string (o), opcode);
 
@@ -1114,14 +1114,17 @@ _   (Read_u8 (& opcode, & o->wasm, o->wasmEnd));             m3log (compile, d_i
 
     //printf("Extended opcode: 0x%x\n", i_opcode);
 
-    M3Compiler compiler = GetOpInfo (i_opcode)->compiler;
+    const M3OpInfo* opinfo = GetOpInfo (i_opcode);
+    _throwif (m3Err_unknownOpcode, not opinfo);
+
+    M3Compiler compiler = opinfo->compiler;
     _throwif (m3Err_noCompiler, not compiler);
 
 _   ((* compiler) (o, i_opcode));
 
     o->previousOpcode = i_opcode;
 
-    _catch: return result;
+    } _catch: return result;
 }
 #endif
 
@@ -1463,14 +1466,14 @@ _       (ReadLEB_u32 (& target, & o->wasm, o->wasmEnd));
         IM3CompilationScope scope;
 _       (GetBlockScope (o, & scope, target));
 
-        // create a ContinueLoop operation on a fresh page
+        // TODO: don't need codepage rigmarole for
+        // no-param forward-branch targets
+
 _       (AcquireCompilationCodePage (o, & continueOpPage));
 
         pc_t startPC = GetPagePC (continueOpPage);
         IM3CodePage savedPage = o->page;
         o->page = continueOpPage;
-
-        // TODO: validate stack with target
 
         if (scope->opcode == c_waOp_loop)
         {
@@ -1665,7 +1668,7 @@ M3Result  Compile_Memory_Grow  (IM3Compilation o, m3opcode_t i_opcode)
 _   (ReadLEB_i7 (& reserved, & o->wasm, o->wasmEnd));
 
 _   (CopyStackTopToRegister (o, false));
-_   (Pop (o));
+_   (PopType (o, c_m3Type_i32));
 
 _   (EmitOp     (o, op_MemGrow));
 
@@ -1673,6 +1676,33 @@ _   (PushRegister (o, c_m3Type_i32));
 
     _catch: return result;
 }
+
+
+M3Result  Compile_Memory_CopyFill  (IM3Compilation o, m3opcode_t i_opcode)
+{
+    M3Result result = m3Err_none;
+
+    i8 reserved;
+_   (ReadLEB_i7 (& reserved, & o->wasm, o->wasmEnd));
+
+    IM3Operation op;
+    if (i_opcode == c_waOp_memoryCopy)
+    {
+_       (ReadLEB_i7 (& reserved, & o->wasm, o->wasmEnd));
+        op = op_MemCopy;
+    }
+    else op = op_MemFill;
+
+_   (CopyStackTopToRegister (o, false));
+
+_   (EmitOp  (o, op));
+_   (PopType (o, c_m3Type_i32));
+_   (EmitSlotNumOfStackTopAndPop (o));
+_   (EmitSlotNumOfStackTopAndPop (o));
+
+    _catch: return result;
+}
+
 
 static
 M3Result  ReadBlockType  (IM3Compilation o, IM3FuncType * o_blockType)
@@ -2048,7 +2078,7 @@ _           (PushRegister (o, op->type));
 #       ifdef DEBUG
             result = ErrorCompile ("no operation found for opcode", o, "'%s'", op->name);
 #       else
-            result = ErrorCompile ("no operation found for opcode", o, "");
+            result = ErrorCompile ("no operation found for opcode", o, "%x", i_opcode);
 #       endif
         _throw (result);
     }
@@ -2340,7 +2370,12 @@ const M3OpInfo c_operations [] =
 
 # ifdef DEBUG // for codepage logging. the order doesn't matter:
 #   define d_m3DebugOp(OP) M3OP (#OP, 0, none, { op_##OP })
+
+# if d_m3HasFloat
 #   define d_m3DebugTypedOp(OP) M3OP (#OP, 0, none, { op_##OP##_i32, op_##OP##_i64, op_##OP##_f32, op_##OP##_f64, })
+# else
+#   define d_m3DebugTypedOp(OP) M3OP (#OP, 0, none, { op_##OP##_i32, op_##OP##_i64 })
+# endif
 
     d_m3DebugOp (Compile),          d_m3DebugOp (Entry),            d_m3DebugOp (End),
     d_m3DebugOp (Unsupported),      d_m3DebugOp (CallRawFunction),
@@ -2353,18 +2388,25 @@ const M3OpInfo c_operations [] =
     d_m3DebugOp (Select_i32_rss),   d_m3DebugOp (Select_i32_srs),   d_m3DebugOp (Select_i32_ssr),   d_m3DebugOp (Select_i32_sss),
     d_m3DebugOp (Select_i64_rss),   d_m3DebugOp (Select_i64_srs),   d_m3DebugOp (Select_i64_ssr),   d_m3DebugOp (Select_i64_sss),
 
+# if d_m3HasFloat
     d_m3DebugOp (Select_f32_sss),   d_m3DebugOp (Select_f32_srs),   d_m3DebugOp (Select_f32_ssr),
     d_m3DebugOp (Select_f32_rss),   d_m3DebugOp (Select_f32_rrs),   d_m3DebugOp (Select_f32_rsr),
 
     d_m3DebugOp (Select_f64_sss),   d_m3DebugOp (Select_f64_srs),   d_m3DebugOp (Select_f64_ssr),
     d_m3DebugOp (Select_f64_rss),   d_m3DebugOp (Select_f64_rrs),   d_m3DebugOp (Select_f64_rsr),
+# endif
 
     d_m3DebugTypedOp (SetGlobal),   d_m3DebugOp (SetGlobal_s32),    d_m3DebugOp (SetGlobal_s64),
 
     d_m3DebugTypedOp (SetRegister), d_m3DebugTypedOp (SetSlot),     d_m3DebugTypedOp (PreserveSetSlot),
 # endif
 
-# ifdef d_m3CompileExtendedOpcode
+# ifdef d_m3EnableExtendedOpcodes
+# ifdef DEBUG
+    d_m3DebugOp (MemFill),
+    d_m3DebugOp (MemCopy),
+#endif
+
     [0xFC] = M3OP( "0xFC", 0, c_m3Type_unknown,   d_emptyOpList,  Compile_ExtendedOpcode ),
 # endif
 
@@ -2384,8 +2426,14 @@ const M3OpInfo c_operationsFC [] =
     M3OP_F( "i64.trunc_s:sat/f64",0,  i_64,   d_convertOpList (i64_TruncSat_f64),        Compile_Convert ),  // 0x06
     M3OP_F( "i64.trunc_u:sat/f64",0,  i_64,   d_convertOpList (u64_TruncSat_f64),        Compile_Convert ),  // 0x07
 
+    M3OP_RESERVED, M3OP_RESERVED,
+
+    M3OP( "memory.copy",            0,  none,   d_emptyOpList,                           Compile_Memory_CopyFill ), // 0x0a
+    M3OP( "memory.fill",            0,  none,   d_emptyOpList,                           Compile_Memory_CopyFill ), // 0x0b
+
+
 # ifdef DEBUG
-    M3OP_F( "termination", 0, c_m3Type_unknown ) // for find_operation_info
+    M3OP( "termination", 0, c_m3Type_unknown ) // for find_operation_info
 # endif
 };
 
@@ -2431,7 +2479,9 @@ _       (Read_opcode (& opcode, & o->wasm, o->wasmEnd));                log_opco
         }
 
         IM3OpInfo opinfo = GetOpInfo(opcode);
-        _throwif (m3Err_unknownOpcode, opinfo == NULL);
+
+        if (opinfo == NULL)
+            _throw (ErrorCompile (m3Err_unknownOpcode, o, "opcode '%x' not available", opcode));
 
         if (opinfo->compiler) {
 _           ((* opinfo->compiler) (o, opcode))
@@ -2482,18 +2532,6 @@ _           (PushAllocatedSlot (o, type));
 }
 
 
-M3Result  CommitBlockResults  (IM3Compilation o)
-{
-    M3Result result = m3Err_none;
-
-    // pop the param/result slot records
-    o->stackIndex = o->block.exitStackIndex;
-
-_   (PushBlockResults (o));
-
-    _catch: return result;
-}
-
 
 M3Result  CompileBlock  (IM3Compilation o, IM3FuncType i_blockType, m3opcode_t i_blockOpcode)
 {
@@ -2511,11 +2549,11 @@ M3Result  CompileBlock  (IM3Compilation o, IM3FuncType i_blockType, m3opcode_t i
 
     /*
      The block stack frame is a little strange but for good reasons.  Because blocks need to be restarted to
-     compile different pathways (if/else), the incoming params must be saved.  The natural incoming
-     stack parameters are popped and validated.  But, then the stack top is readjusted so they aren't overwritten.
-     Next, the result are preallocated to find destination slots.  But, again these are immediately popped
-     (deallocated) and the stack top is readjusted to keep these records around so that branch instructions
-     can find their result landing pads.  Finally, the params are copied from the "dead" records and pushed back
+     compile different pathways (if/else), the incoming params must be saved.  The parameters are popped
+     and validated.  But, then the stack top is readjusted so they aren't subsequently overwritten.
+     Next, the result are preallocated to find destination slots.  But again these are immediately popped
+     (deallocated) and the stack top is readjusted to keep these records in pace. This allows branch instructions
+     to find their result landing pads.  Finally, the params are copied from the "dead" records and pushed back
      onto the stack as active stack items for the CompileBlockStatements () call.
 
     [     block      ]
@@ -2590,7 +2628,10 @@ _           (ResolveBlockResults (o, & o->block, /* isBranch: */ false));
 _       (UnwindBlockStack (o))
 
         if (not ((i_blockOpcode == c_waOp_if and numResults) or o->previousOpcode == c_waOp_else))
-_           (CommitBlockResults (o));
+        {
+            o->stackIndex = o->block.exitStackIndex;
+_           (PushBlockResults (o));
+        }
     }
 
     PatchBranches (o);

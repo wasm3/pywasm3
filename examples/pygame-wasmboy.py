@@ -1,10 +1,9 @@
 #!/usr/bin/env python3
 
 import os, sys, struct, time, io
+import urllib.request
 import wasm3
 import numpy
-import urllib.request
-from enum import Enum
 
 os.environ['PYGAME_HIDE_SUPPORT_PROMPT'] = "true"
 
@@ -27,19 +26,27 @@ else:
         rom_f = urllib.request.urlopen('https://github.com/AntonioND/back-to-color/raw/master/demo.gbc')
         rom_size = int(rom_f.headers['content-length'])
     except Exception:
-        print('Download failed. Please specify GB ROM file.')
+        print('Download failed. Please specify GameBoy ROM file to run.')
         sys.exit(1)
+
+# Detect GameBoy Color ROM
 
 rom_data = rom_f.read()
 rom_is_color = (rom_data[0x0143] != 0)
 rom_f = io.BytesIO(rom_data)
 
-print("Color:", rom_is_color)
-
 scriptpath = os.path.dirname(os.path.realpath(__file__))
 wasm_fn = os.path.join(scriptpath, f"./wasm/wasmerboy.wasm")
 
 # Prepare Wasm3 engine
+
+env = wasm3.Environment()
+rt = env.new_runtime(16*1024)
+with open(wasm_fn, "rb") as f:
+    mod = env.parse_module(f.read())
+    rt.load(mod)
+
+# Prepare PyGame
 
 img_size = (160, 144)
 (img_w, img_h) = img_size
@@ -49,12 +56,22 @@ surface = pygame.display.set_mode(scr_size)
 pygame.display.set_caption("Wasm3 WasmBoy")
 clock = pygame.time.Clock()
 
+# WASI emulation
+
+class FileType:
+    DIR = 3
+    REG = 4
+
+class WasiErrno:
+    SUCCESS = 0
+    BADF    = 8
+    INVAL   = 28
+
 def virtual_rom_read(size):
     data = rom_f.read(size)
     return data
 
 def virtual_size_write(data):
-    #print(data.decode())
     # Always 160x144
     pass
 
@@ -71,17 +88,16 @@ def virtual_fb_write(data):
         # Convert BGRX to RGBX
         arr = arr.reshape((img_w*img_h, 4))[..., [2,1,0,3]]
     else:
-        # Convert greyscale to "LCD green shades"
+        # Convert grayscale to "LCD green shades"
         hi = numpy.array([0.659, 0.776, 0.306, 0])
         lo = numpy.array([0.118, 0.129, 0.086, 0])
-        w = numpy.array([255, 255, 255, 0])
+        w  = numpy.array([255, 255, 255, 0])
         arr = arr.reshape((img_w*img_h, 4))
         arr = arr * hi + (w-arr) * lo
     data = arr.astype(numpy.uint8).tobytes()
     img = pygame.image.frombuffer(data, img_size, "RGBX")
 
 def virtual_input_read(size):
-    # Process input
     inputs = b''
     for event in pygame.event.get():
         if (event.type == pygame.QUIT or
@@ -105,59 +121,24 @@ def virtual_input_read(size):
                 inputs += struct.pack("<BB", 3, key)
     return inputs
 
-class FileType(Enum):
-    DIR = 3
-    REG = 4
-
-class FilePos(Enum):
-    CUR = 0
-    END = 1
-    SET = 2
-
-class WasiErrno(Enum):
-    SUCCESS = 0
-    ACCES   = 2
-    AGAIN   = 6
-    ALREADY = 7
-    BADF    = 8
-    BUSY    = 10
-    INVAL   = 28
-
 vfs = {
     "rom": {
-        "fd":   1000,
-        "type": FileType.REG,
-        "size": rom_size,
-        "read": virtual_rom_read,
+        "fd":   1000,   "type": FileType.REG,   "read": virtual_rom_read,   "size": rom_size,
     },
     "_wasmer/dev/fb0/virtual_size": {
-        "fd":   1001,
-        "type": FileType.REG,
-        "write": virtual_size_write,
+        "fd":   1001,   "type": FileType.REG,   "write": virtual_size_write,
     },
     "_wasmer/dev/fb0/input": {
-        "fd":   1002,
-        "type": FileType.REG,
-        "read": virtual_input_read,
+        "fd":   1002,   "type": FileType.REG,   "read": virtual_input_read,
     },
     "_wasmer/dev/fb0/draw": {
-        "fd":   1003,
-        "type": FileType.REG,
-        "write": virtual_draw_write,
+        "fd":   1003,   "type": FileType.REG,   "write": virtual_draw_write,
     },
     "_wasmer/dev/fb0/fb": {
-        "fd":   1004,
-        "type": FileType.REG,
-        "write": virtual_fb_write,
+        "fd":   1004,   "type": FileType.REG,   "write": virtual_fb_write,
     },
 }
 vfs_fds = { v["fd"] : v for (k,v) in vfs.items() }
-
-env = wasm3.Environment()
-rt = env.new_runtime(16*1024)
-with open(wasm_fn, "rb") as f:
-    mod = env.parse_module(f.read())
-    rt.load(mod)
 
 def wasi_generic_api(func):
     for modname in ["wasi_unstable", "wasi_snapshot_preview1"]:
@@ -169,14 +150,14 @@ def args_sizes_get(argc, buf_sz):
     mem = rt.get_memory(0)
     struct.pack_into("<I", mem, argc,   2)
     struct.pack_into("<I", mem, buf_sz, 32)
-    return WasiErrno.SUCCESS.value
+    return WasiErrno.SUCCESS
 
 @wasi_generic_api
 def args_get(argv, buf):
     mem = rt.get_memory(0)
     struct.pack_into("<II", mem, argv, buf, buf+8)
     struct.pack_into("8s4s", mem, buf, b"wasmboy\0", b"rom\0")
-    return WasiErrno.SUCCESS.value
+    return WasiErrno.SUCCESS
 
 @wasi_generic_api
 def path_filestat_get(fd, flags, path, path_len, buff):
@@ -184,9 +165,9 @@ def path_filestat_get(fd, flags, path, path_len, buff):
     path = mem[path:path+path_len].tobytes().decode()
     #print("path_filestat_get:", path)
     f = vfs[path]
-    struct.pack_into("<QQBxxxIQQQQ", mem, buff, 1, 1, f["type"].value, 1, f["size"], 0, 0 , 0)
+    struct.pack_into("<QQBxxxIQQQQ", mem, buff, 1, 1, f["type"], 1, f["size"], 0, 0 , 0)
 
-    return WasiErrno.SUCCESS.value
+    return WasiErrno.SUCCESS
 
 @wasi_generic_api
 def path_open(dirfd, dirflags, path, path_len, oflags, fs_rights_base, fs_rights_inheriting, fs_flags, fd):
@@ -197,14 +178,14 @@ def path_open(dirfd, dirflags, path, path_len, oflags, fs_rights_base, fs_rights
     struct.pack_into("<I", mem, fd, fd_val)
 
     #print("path_open:", f"{dirfd}:{path} => {fd_val}")
-    return WasiErrno.SUCCESS.value
+    return WasiErrno.SUCCESS
 
 @wasi_generic_api
 def fd_seek(fd, offset, whence, result):
     mem = rt.get_memory(0)
     #print("fd_seek:", f"{fd} {FilePos(whence)}:{offset}")
     struct.pack_into("<Q", mem, result, 0)
-    return WasiErrno.SUCCESS.value
+    return WasiErrno.SUCCESS
 
 @wasi_generic_api
 def fd_read(fd, iovs, iovs_len, nread):
@@ -231,9 +212,9 @@ def fd_read(fd, iovs, iovs_len, nread):
         struct.pack_into("<I", mem, nread, data_off)
     else:
         print(f"Cannot read fd: {fd}")
-        return WasiErrno.BADF.value
+        return WasiErrno.BADF
 
-    return WasiErrno.SUCCESS.value
+    return WasiErrno.SUCCESS
 
 @wasi_generic_api
 def fd_write(fd, iovs, iovs_len, nwritten):
@@ -252,21 +233,21 @@ def fd_write(fd, iovs, iovs_len, nwritten):
         vfs_fds[fd]["write"](data)
     else:
         print(f"Cannot write fd: {fd}")
-        return WasiErrno.BADF.value
+        return WasiErrno.BADF
 
-    return WasiErrno.SUCCESS.value
+    return WasiErrno.SUCCESS
 
 @wasi_generic_api
 def clock_time_get(clk_id, precision, result):
     mem = rt.get_memory(0)
     struct.pack_into("<Q", mem, result, 0)
-    return WasiErrno.SUCCESS.value
+    return WasiErrno.SUCCESS
 
 @wasi_generic_api
 def poll_oneoff(ev_in, ev_out, subs, evts):
     mem = rt.get_memory(0)
     clock.tick(60)
-    return WasiErrno.SUCCESS.value
+    return WasiErrno.SUCCESS
 
 wasm_start = rt.find_function("_start")
 try:
