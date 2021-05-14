@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 
-import os, sys, struct, time
+import os, sys, struct, time, io
 import wasm3
 import numpy
 import urllib.request
@@ -29,6 +29,12 @@ else:
     except Exception:
         print('Download failed. Please specify GB ROM file.')
         sys.exit(1)
+
+rom_data = rom_f.read()
+rom_is_color = (rom_data[0x0143] != 0)
+rom_f = io.BytesIO(rom_data)
+
+print("Color:", rom_is_color)
 
 scriptpath = os.path.dirname(os.path.realpath(__file__))
 wasm_fn = os.path.join(scriptpath, f"./wasm/wasmerboy.wasm")
@@ -60,9 +66,17 @@ def virtual_draw_write(data):
 
 def virtual_fb_write(data):
     global img
-    # Convert BGRX to RGBX
     arr = numpy.frombuffer(data, dtype=numpy.uint8)
-    arr = arr.reshape((img_w*img_h, 4))[..., [2,1,0,3]]
+    if rom_is_color:
+        # Convert BGRX to RGBX
+        arr = arr.reshape((img_w*img_h, 4))[..., [2,1,0,3]]
+    else:
+        # Convert greyscale to "LCD green shades"
+        hi = numpy.array([0.659, 0.776, 0.306, 0])
+        lo = numpy.array([0.118, 0.129, 0.086, 0])
+        w = numpy.array([255, 255, 255, 0])
+        arr = arr.reshape((img_w*img_h, 4))
+        arr = arr * hi + (w-arr) * lo
     data = arr.astype(numpy.uint8).tobytes()
     img = pygame.image.frombuffer(data, img_size, "RGBX")
 
