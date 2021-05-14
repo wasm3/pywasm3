@@ -300,21 +300,28 @@ m3ApiRawFunction(CallImport)
 static PyObject *
 M3_Module_link_function(m3_module *self, PyObject *args)
 {
-    if (PyTuple_Size(args) != 4) {
-        PyErr_SetString(PyExc_TypeError, "link_function takes 4 arguments");
+    PyObject *mod_name, *func_name, *func_sig, *pFunc;
+    if (PyTuple_Size(args) == 4) {
+        mod_name  = PyTuple_GET_ITEM(args, 0);
+        func_name = PyTuple_GET_ITEM(args, 1);
+        func_sig  = PyTuple_GET_ITEM(args, 2);
+        pFunc     = PyTuple_GET_ITEM(args, 3);
+    } else if (PyTuple_Size(args) == 3) {
+        mod_name  = PyTuple_GET_ITEM(args, 0);
+        func_name = PyTuple_GET_ITEM(args, 1);
+        func_sig  = NULL;
+        pFunc     = PyTuple_GET_ITEM(args, 2);
+    } else {
+        PyErr_SetString(PyExc_TypeError, "link_function takes 3 or 4 arguments");
         return NULL;
     }
 
-    PyObject *mod_name  = PyTuple_GET_ITEM(args, 0);
-    PyObject *func_name = PyTuple_GET_ITEM(args, 1);
-    PyObject *func_sig  = PyTuple_GET_ITEM(args, 2);
-    PyObject *pFunc     = PyTuple_GET_ITEM(args, 3);
     if (!PyCallable_Check(pFunc)) {
         PyErr_SetString(PyExc_TypeError, "function should be a callable object");
         return NULL;
     }
     M3Result err = m3_LinkRawFunctionEx (self->m, PyUnicode_AsUTF8(mod_name), PyUnicode_AsUTF8(func_name),
-                                         PyUnicode_AsUTF8(func_sig), CallImport, pFunc);
+                                         (func_sig?PyUnicode_AsUTF8(func_sig):NULL), CallImport, pFunc);
     if (err && err != m3Err_functionLookupFailed) {
         return formatError(PyExc_RuntimeError, m3_GetModuleRuntime(self->m), err);
     }

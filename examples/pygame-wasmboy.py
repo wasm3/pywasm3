@@ -145,18 +145,25 @@ with open(wasm_fn, "rb") as f:
     mod = env.parse_module(f.read())
     rt.load(mod)
 
+def wasi_generic_api(func):
+    for modname in ["wasi_unstable", "wasi_snapshot_preview1"]:
+        mod.link_function(modname, func.__name__, func)
+
+@wasi_generic_api
 def args_sizes_get(argc, buf_sz):
     mem = rt.get_memory(0)
     struct.pack_into("<I", mem, argc,   2)
     struct.pack_into("<I", mem, buf_sz, 32)
     return WasiErrno.SUCCESS.value
 
+@wasi_generic_api
 def args_get(argv, buf):
     mem = rt.get_memory(0)
     struct.pack_into("<II", mem, argv, buf, buf+8)
     struct.pack_into("8s4s", mem, buf, b"wasmboy\0", b"rom\0")
     return WasiErrno.SUCCESS.value
 
+@wasi_generic_api
 def path_filestat_get(fd, flags, path, path_len, buff):
     mem = rt.get_memory(0)
     path = mem[path:path+path_len].tobytes().decode()
@@ -166,6 +173,7 @@ def path_filestat_get(fd, flags, path, path_len, buff):
 
     return WasiErrno.SUCCESS.value
 
+@wasi_generic_api
 def path_open(dirfd, dirflags, path, path_len, oflags, fs_rights_base, fs_rights_inheriting, fs_flags, fd):
     mem = rt.get_memory(0)
     path = mem[path:path+path_len].tobytes().decode()
@@ -176,12 +184,14 @@ def path_open(dirfd, dirflags, path, path_len, oflags, fs_rights_base, fs_rights
     #print("path_open:", f"{dirfd}:{path} => {fd_val}")
     return WasiErrno.SUCCESS.value
 
+@wasi_generic_api
 def fd_seek(fd, offset, whence, result):
     mem = rt.get_memory(0)
     #print("fd_seek:", f"{fd} {FilePos(whence)}:{offset}")
     struct.pack_into("<Q", mem, result, 0)
     return WasiErrno.SUCCESS.value
 
+@wasi_generic_api
 def fd_read(fd, iovs, iovs_len, nread):
     mem = rt.get_memory(0)
 
@@ -210,6 +220,7 @@ def fd_read(fd, iovs, iovs_len, nread):
 
     return WasiErrno.SUCCESS.value
 
+@wasi_generic_api
 def fd_write(fd, iovs, iovs_len, nwritten):
     mem = rt.get_memory(0)
 
@@ -230,26 +241,17 @@ def fd_write(fd, iovs, iovs_len, nwritten):
 
     return WasiErrno.SUCCESS.value
 
+@wasi_generic_api
 def clock_time_get(clk_id, precision, result):
     mem = rt.get_memory(0)
     struct.pack_into("<Q", mem, result, 0)
     return WasiErrno.SUCCESS.value
 
+@wasi_generic_api
 def poll_oneoff(ev_in, ev_out, subs, evts):
     mem = rt.get_memory(0)
     clock.tick(60)
     return WasiErrno.SUCCESS.value
-
-for modname in ["wasi_unstable", "wasi_snapshot_preview1"]:
-    mod.link_function(modname, "args_get",              "i(**)",        args_get)
-    mod.link_function(modname, "args_sizes_get",        "i(**)",        args_sizes_get)
-    mod.link_function(modname, "path_filestat_get",     "i(ii*i*)",     path_filestat_get)
-    mod.link_function(modname, "path_open",             "i(ii*iiIIi*)", path_open)
-    mod.link_function(modname, "fd_seek",               "i(iIi*)",      fd_seek)
-    mod.link_function(modname, "fd_write",              "i(i*i*)",      fd_write)
-    mod.link_function(modname, "fd_read",               "i(i*i*)",      fd_read)
-    mod.link_function(modname, "clock_time_get",        "i(iI*)",       clock_time_get)
-    mod.link_function(modname, "poll_oneoff",           "i(**i*)",      poll_oneoff)
 
 wasm_start = rt.find_function("_start")
 try:
