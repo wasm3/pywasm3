@@ -75,19 +75,15 @@ def virtual_input_read(size):
             pygame.quit()
             sys.exit()
         elif event.type == pygame.KEYDOWN or event.type == pygame.KEYUP:
-            key = 0
-            if event.key == pygame.K_UP:
-                key = 38
-            elif event.key == pygame.K_DOWN:
-                key = 40
-            elif event.key == pygame.K_LEFT:
-                key = 37
-            elif event.key == pygame.K_RIGHT:
-                key = 39
-            elif event.key == pygame.K_RETURN:
-                key = 13
-            elif event.key == pygame.K_BACKSPACE:
-                key = 8
+            keymap = {
+                pygame.K_UP:        38,
+                pygame.K_DOWN:      40,
+                pygame.K_LEFT:      37,
+                pygame.K_RIGHT:     39,
+                pygame.K_RETURN:    13,
+                pygame.K_BACKSPACE: 8,
+            }
+            key = keymap.get(event.key, 0)
 
             if event.type == pygame.KEYDOWN:
                 inputs += struct.pack("<BB", 1, key)
