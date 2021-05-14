@@ -48,7 +48,7 @@ def virtual_rom_read(size):
     return data
 
 def virtual_size_write(data):
-    #print(data.decode(), end='')
+    #print(data.decode())
     # Always 160x144
     pass
 
@@ -148,6 +148,7 @@ with open(wasm_fn, "rb") as f:
 def wasi_generic_api(func):
     for modname in ["wasi_unstable", "wasi_snapshot_preview1"]:
         mod.link_function(modname, func.__name__, func)
+    return func
 
 @wasi_generic_api
 def args_sizes_get(argc, buf_sz):
