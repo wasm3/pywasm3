@@ -23,8 +23,12 @@ if rom_fn:
     rom_size = os.path.getsize(rom_fn)
 else:
     print('Downloading "Back to Color" demo by Antonio Niño Díaz...')
-    rom_f = urllib.request.urlopen('https://github.com/AntonioND/back-to-color/raw/master/demo.gbc')
-    rom_size = int(rom_f.headers['content-length'])
+    try:
+        rom_f = urllib.request.urlopen('https://github.com/AntonioND/back-to-color/raw/master/demo.gbc')
+        rom_size = int(rom_f.headers['content-length'])
+    except Exception:
+        print('Download failed. Please specify GB ROM file.')
+        sys.exit(1)
 
 scriptpath = os.path.dirname(os.path.realpath(__file__))
 wasm_fn = os.path.join(scriptpath, f"./wasm/wasmerboy.wasm")
@@ -69,7 +73,7 @@ def virtual_input_read(size):
         if (event.type == pygame.QUIT or
             (event.type == pygame.KEYDOWN and event.key == pygame.K_ESCAPE)):
             pygame.quit()
-            quit()
+            sys.exit()
         elif event.type == pygame.KEYDOWN or event.type == pygame.KEYUP:
             key = 0
             if event.key == pygame.K_UP:
