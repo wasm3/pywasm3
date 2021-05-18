@@ -20,9 +20,9 @@ rt = env.new_runtime(1024)
 with open(wasm_fn, "rb") as f:
     mod = env.parse_module(f.read())
     rt.load(mod)
-    mod.link_function("Math", "sin", "f(f)", math.sin)
-    mod.link_function("Math", "random", "f()", random.random)
-    mod.link_function("env", "t", "v(i)", env_t)
+    mod.link_function("Math", "sin",    math.sin)
+    mod.link_function("Math", "random", random.random)
+    mod.link_function("env",  "t",      env_t)
 
 wasm_run = rt.find_function("run")
 mem = rt.get_memory(0)
