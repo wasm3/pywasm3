@@ -1,7 +1,6 @@
 #include "Python.h"
 
 #include "wasm3.h"
-#include "m3_api_defs.h"
 
 #define MAX_ARGS 32
 
@@ -82,7 +81,7 @@ formatError(PyObject *exception, IM3Runtime runtime, M3Result err)
 }
 
 static void
-put_arg_on_stack(u64 *s, M3ValueType type, PyObject *arg)
+put_arg_on_stack(uint64_t *s, M3ValueType type, PyObject *arg)
 {
     switch (type) {
         case c_m3Type_i32:  *(int32_t*)(s) = PyLong_AsLong(arg);     break;
@@ -93,7 +92,7 @@ put_arg_on_stack(u64 *s, M3ValueType type, PyObject *arg)
 }
 
 static PyObject *
-get_arg_from_stack(u64 *s, M3ValueType type)
+get_arg_from_stack(uint64_t *s, M3ValueType type)
 {
     switch (type) {
         case c_m3Type_i32:  return PyLong_FromLong(     *(int32_t*)s);  break;
@@ -522,7 +521,7 @@ M3_Function_call(m3_function *self, PyObject *args, PyObject *kwargs)
     memset(valptrs, 0, sizeof(valptrs));
 
     for (int i = 0; i < nArgs; i++) {
-        u64* s = &valbuff[i];
+        uint64_t* s = &valbuff[i];
         valptrs[i] = s;
         put_arg_on_stack(s, m3_GetArgType(f, i), PyTuple_GET_ITEM(args, i));
     }
