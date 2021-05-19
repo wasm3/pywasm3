@@ -85,10 +85,10 @@ static void
 put_arg_on_stack(u64 *s, M3ValueType type, PyObject *arg)
 {
     switch (type) {
-        case c_m3Type_i32:  *(i32*)(s) = PyLong_AsLong(arg);     break;
-        case c_m3Type_i64:  *(i64*)(s) = PyLong_AsLongLong(arg); break;
-        case c_m3Type_f32:  *(f32*)(s) = PyFloat_AsDouble(arg);  break;
-        case c_m3Type_f64:  *(f64*)(s) = PyFloat_AsDouble(arg);  break;
+        case c_m3Type_i32:  *(int32_t*)(s) = PyLong_AsLong(arg);     break;
+        case c_m3Type_i64:  *(int64_t*)(s) = PyLong_AsLongLong(arg); break;
+        case c_m3Type_f32:  *(float*)(s)   = PyFloat_AsDouble(arg);  break;
+        case c_m3Type_f64:  *(double*)(s)  = PyFloat_AsDouble(arg);  break;
     }
 }
 
@@ -96,10 +96,10 @@ static PyObject *
 get_arg_from_stack(u64 *s, M3ValueType type)
 {
     switch (type) {
-        case c_m3Type_i32:  return PyLong_FromLong(     *(i32*)s);   break;
-        case c_m3Type_i64:  return PyLong_FromLongLong( *(i64*)s);   break;
-        case c_m3Type_f32:  return PyFloat_FromDouble(  *(f32*)s);   break;
-        case c_m3Type_f64:  return PyFloat_FromDouble(  *(f64*)s);   break;
+        case c_m3Type_i32:  return PyLong_FromLong(     *(int32_t*)s);  break;
+        case c_m3Type_i64:  return PyLong_FromLongLong( *(int64_t*)s);  break;
+        case c_m3Type_f32:  return PyFloat_FromDouble(  *(float*)s);    break;
+        case c_m3Type_f64:  return PyFloat_FromDouble(  *(double*)s);   break;
         default:
             return PyErr_Format(PyExc_TypeError, "unknown type %d", (int)type);
     }
