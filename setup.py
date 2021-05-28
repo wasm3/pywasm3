@@ -8,7 +8,7 @@ SOURCES = glob('wasm3/*.c') + ['m3module.c']
 
 setup(
     name         = "pywasm3",
-    version      = "0.4.9",
+    version      = "0.5.0",
     description  = "The fastest WebAssembly interpreter",
     platforms    = "any",
     url          = "https://github.com/wasm3/pywasm3",
