@@ -7,7 +7,6 @@
 
 #include "m3_env.h"
 #include "m3_compile.h"
-#include "m3_exec.h"
 #include "m3_exception.h"
 #include "m3_info.h"
 
@@ -39,7 +38,6 @@ _       (ReadLEB_u32 (& o_memory->maxPages, io_bytes, i_end));
 
 M3Result  ParseSection_Type  (IM3Module io_module, bytes_t i_bytes, cbytes_t i_end)
 {
-    M3Result result = m3Err_none;
     IM3FuncType ftype = NULL;
 
 _try {
@@ -128,7 +126,7 @@ _   (ReadLEB_u32 (& numFunctions, & i_bytes, i_end));                           
 
     _throwif("too many functions", numFunctions > d_m3MaxSaneFunctionsCount);
 
-    // TODO: prealloc functions
+_   (Module_PreallocFunctions(io_module, io_module->numFunctions + numFunctions));
 
     for (u32 i = 0; i < numFunctions; ++i)
     {
@@ -152,6 +150,9 @@ M3Result  ParseSection_Import  (IM3Module io_module, bytes_t i_bytes, cbytes_t i
 _   (ReadLEB_u32 (& numImports, & i_bytes, i_end));                                 m3log (parse, "** Import [%d]", numImports);
 
     _throwif("too many imports", numImports > d_m3MaxSaneImportsCount);
+
+    // Most imports are functions, so we won't waste much space anyway (if any)
+_   (Module_PreallocFunctions(io_module, numImports));
 
     for (u32 i = 0; i < numImports; ++i)
     {
@@ -307,9 +308,7 @@ M3Result  ParseSection_Element  (IM3Module io_module, bytes_t i_bytes, cbytes_t 
     M3Result result = m3Err_none;
 
     u32 numSegments;
-    result = ReadLEB_u32 (& numSegments, & i_bytes, i_end);                         m3log (parse, "** Element [%d]", numSegments);
-
-    _throwif ("error parsing Element section", result);
+_   (ReadLEB_u32 (& numSegments, & i_bytes, i_end));                         m3log (parse, "** Element [%d]", numSegments);
 
     _throwif ("too many element segments", numSegments > d_m3MaxSaneElementSegments);
 
@@ -476,17 +475,11 @@ _       (Parse_InitExpr (io_module, & i_bytes, i_end));
 }
 
 
-M3Result  ParseSection_Custom  (M3Module * io_module, bytes_t i_bytes, cbytes_t i_end)
+M3Result  ParseSection_Name  (M3Module * io_module, bytes_t i_bytes, cbytes_t i_end)
 {
     M3Result result;
 
     cstr_t name;
-_   (Read_utf8 (& name, & i_bytes, i_end));
-                                                                                    m3log (parse, "** Custom: '%s'", name);
-    if (strcmp (name, "name") != 0)
-        i_bytes = i_end;
-
-    m3_Free (name);
 
     while (i_bytes < i_end)
     {
@@ -528,6 +521,25 @@ _               (Read_utf8 (& name, & i_bytes, i_end));
 
         i_bytes = start + payloadLength;
     }
+
+    _catch: return result;
+}
+
+
+M3Result  ParseSection_Custom  (M3Module * io_module, bytes_t i_bytes, cbytes_t i_end)
+{
+    M3Result result;
+
+    cstr_t name;
+_   (Read_utf8 (& name, & i_bytes, i_end));
+                                                                                    m3log (parse, "** Custom: '%s'", name);
+    if (strcmp (name, "name") == 0) {
+_       (ParseSection_Name(io_module, i_bytes, i_end));
+    } else if (io_module->environment->customSectionHandler) {
+_       (io_module->environment->customSectionHandler(io_module, name, i_bytes, i_end));
+    }
+
+    m3_Free (name);
 
     _catch: return result;
 }
@@ -577,9 +589,7 @@ M3Result  ParseModuleSection  (M3Module * o_module, u8 i_sectionType, bytes_t i_
 
 M3Result  m3_ParseModule  (IM3Environment i_environment, IM3Module * o_module, cbytes_t i_bytes, u32 i_numBytes)
 {
-    M3Result result;                                                             m3log (parse, "load module: %d bytes", i_numBytes);
-
-    IM3Module module;
+    IM3Module module;                                                               m3log (parse, "load module: %d bytes", i_numBytes);
 _try {
     module = m3_AllocStruct (M3Module);
     _throwifnull (module);

@@ -20,6 +20,9 @@
 
 #include "wasm3_defs.h"
 
+// Constants
+#define M3_BACKTRACE_TRUNCATED      (void*)(SIZE_MAX)
+
 #if defined(__cplusplus)
 extern "C" {
 #endif
@@ -62,8 +65,6 @@ typedef struct M3BacktraceInfo
 }
 M3BacktraceInfo, * IM3BacktraceInfo;
 
-// Constants
-#define M3_BACKTRACE_TRUNCATED      (void*)(SIZE_MAX)
 
 typedef enum M3ValueType
 {
@@ -137,6 +138,7 @@ d_m3ErrorConst  (tooManyMemorySections,         "only one memory per module is s
 d_m3ErrorConst  (tooManyArgsRets,               "too many arguments or return values")
 
 // link errors
+d_m3ErrorConst  (moduleNotLinked,               "attempting to use module that is not loaded")
 d_m3ErrorConst  (moduleAlreadyLinked,           "attempting to bind module to multiple runtimes")
 d_m3ErrorConst  (functionLookupFailed,          "function lookup failed")
 d_m3ErrorConst  (functionImportMissing,         "missing imported function")
@@ -146,7 +148,7 @@ d_m3ErrorConst  (malformedFunctionSignature,    "malformed function signature")
 // compilation errors
 d_m3ErrorConst  (noCompiler,                    "no compiler found for opcode")
 d_m3ErrorConst  (unknownOpcode,                 "unknown opcode")
-d_m3ErrorConst  (restictedOpcode,               "restricted opcode")
+d_m3ErrorConst  (restrictedOpcode,              "restricted opcode")
 d_m3ErrorConst  (functionStackOverflow,         "compiling function overran its stack height limit")
 d_m3ErrorConst  (functionStackUnderrun,         "compiling function underran the stack")
 d_m3ErrorConst  (mallocFailedCodePage,          "memory allocation failed when acquiring a new M3 code page")
@@ -189,6 +191,11 @@ d_m3ErrorConst  (trapStackOverflow,             "[trap] stack overflow")
     IM3Environment      m3_NewEnvironment           (void);
 
     void                m3_FreeEnvironment          (IM3Environment i_environment);
+
+    typedef M3Result (* M3SectionHandler) (IM3Module i_module, const char* name, const uint8_t * start, const uint8_t * end);
+
+    void                m3_SetCustomSectionHandler  (IM3Environment i_environment,    M3SectionHandler i_handler);
+
 
 //-------------------------------------------------------------------------------------------------------------------------------
 //  execution context
@@ -325,7 +332,7 @@ d_m3ErrorConst  (trapStackOverflow,             "[trap] stack overflow")
 # define m3ApiGetArgMem(TYPE, NAME) TYPE NAME = (TYPE)m3ApiOffsetToPtr(* ((uint32_t *) (_sp++)));
 
 # define m3ApiIsNullPtr(addr)       ((void*)(addr) <= _mem)
-# define m3ApiCheckMem(addr, len)   { if (M3_UNLIKELY(m3ApiIsNullPtr(addr) || ((uint64_t)(uintptr_t)(addr) + (len)) > ((uint64_t)(uintptr_t)(_mem)+m3_GetMemorySize(runtime)))) m3ApiTrap(m3Err_trapOutOfBoundsMemoryAccess); }
+# define m3ApiCheckMem(addr, len)   { if (M3_UNLIKELY(((void*)(addr) < _mem) || ((uint64_t)(uintptr_t)(addr) + (len)) > ((uint64_t)(uintptr_t)(_mem)+m3_GetMemorySize(runtime)))) m3ApiTrap(m3Err_trapOutOfBoundsMemoryAccess); }
 
 # define m3ApiRawFunction(NAME)     const void * NAME (IM3Runtime runtime, IM3ImportContext _ctx, uint64_t * _sp, void * _mem)
 # define m3ApiReturn(VALUE)         { *raw_return = (VALUE); return m3Err_none; }
