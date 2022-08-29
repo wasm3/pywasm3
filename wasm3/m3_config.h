@@ -16,16 +16,12 @@
 #   define d_m3CodePageAlignSize                32*1024
 # endif
 
-# ifndef d_m3EnableCodePageRefCounting
-#   define d_m3EnableCodePageRefCounting        0
-# endif
-
 # ifndef d_m3MaxFunctionStackHeight
-#   define d_m3MaxFunctionStackHeight           2000    // max: 32768
+#   define d_m3MaxFunctionStackHeight           16384    // max: 32768
 # endif
 
 # ifndef d_m3MaxLinearMemoryPages
-#   define d_m3MaxLinearMemoryPages             32768
+#   define d_m3MaxLinearMemoryPages             65536
 # endif
 
 # ifndef d_m3MaxFunctionSlots
