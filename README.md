@@ -2,7 +2,7 @@
 
 # pywasm3
 
-Python bindings for Wasm3, the fastest WebAssembly interpreter
+Python bindings for Wasm3, a fast WebAssembly interpreter and the most universal WASM runtime.
 
 Main repository: [**Wasm3 project**](https://github.com/wasm3/wasm3)
 
