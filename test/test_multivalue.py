@@ -6,8 +6,8 @@ from helpers import wat2wasm
 MV_SWAP_WASM = wat2wasm("""
 (module
   (func (export "swap") (param i32 i32) (result i32 i32)
-    (get_local 1)
-    (get_local 0)
+    (local.get 1)
+    (local.get 0)
   )
 )
 """)
@@ -17,8 +17,8 @@ MV_IMPORT_WASM = wat2wasm("""
   (type $t0 (func (param i32 i64) (result i64 i32)))
   (import "env" "swap" (func $env.swap (type $t0)))
   (func (export "swap") (type $t0)
-    (get_local 0)
-    (get_local 1)
+    (local.get 0)
+    (local.get 1)
     (call $env.swap)
   )
 )

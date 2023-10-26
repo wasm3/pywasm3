@@ -7,16 +7,16 @@ FIB64_WASM = wat2wasm("""
 (module
   (func $fib2 (param $n i64) (param $a i64) (param $b i64) (result i64)
     (if (result i64)
-        (i64.eqz (get_local $n))
-        (then (get_local $a))
-        (else (return_call $fib2 (i64.sub (get_local $n)
+        (i64.eqz (local.get $n))
+        (then (local.get $a))
+        (else (return_call $fib2 (i64.sub (local.get $n)
                                    (i64.const 1))
-                          (get_local $b)
-                          (i64.add (get_local $a)
-                                   (get_local $b))))))
+                          (local.get $b)
+                          (i64.add (local.get $a)
+                                   (local.get $b))))))
 
   (func $fib (export "fib") (param i64) (result i64)
-    (return_call $fib2 (get_local 0)
+    (return_call $fib2 (local.get 0)
                 (i64.const 0)   ;; seed value $a
                 (i64.const 1))) ;; seed value $b
 )
