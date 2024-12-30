@@ -92,7 +92,7 @@ put_arg_on_stack(uint64_t *s, M3ValueType type, PyObject *arg)
 }
 
 static PyObject *
-get_arg_from_stack(uint64_t *s, M3ValueType type)
+get_arg_from_stack(const uint64_t *s, M3ValueType type)
 {
     switch (type) {
         case c_m3Type_i32:  return PyLong_FromLong(     *(int32_t*)s);  break;
@@ -113,7 +113,7 @@ M3_Environment_new_runtime(m3_environment *env, PyObject *stack_size_bytes)
     Py_INCREF(env);
     self->env = env;
     self->r = m3_NewRuntime(env->e, n, NULL);
-    return self;
+    return (PyObject*)self;
 }
 
 static PyObject *
@@ -136,7 +136,7 @@ M3_Environment_parse_module(m3_environment *env, PyObject *bytes)
     self->env = env;
     self->m = m;
     self->total_gas = self->current_gas = 0;
-    return self;
+    return (PyObject*)self;
 }
 
 static PyMethodDef M3_Environment_methods[] = {
@@ -188,7 +188,7 @@ M3_Runtime_find_function(m3_runtime *runtime, PyObject *name)
 	Py_INCREF(runtime);
     self->f = func;
     self->r = runtime->r;
-    return self;
+    return (PyObject*)self;
 }
 
 static PyObject *
@@ -437,13 +437,13 @@ get_result_from_stack(m3_function *func)
     }
 
     if (nRets == 1) {
-        return get_arg_from_stack(valptrs[0], m3_GetRetType(func->f, 0));
+        return get_arg_from_stack((uint64_t*)valptrs[0], m3_GetRetType(func->f, 0));
     } else {
         PyObject *ret = PyTuple_New(nRets);
         if (ret) {
             Py_ssize_t i;
             for (i = 0; i < nRets; ++i) {
-                PyObject *val = get_arg_from_stack(valptrs[i], m3_GetRetType(func->f, i));
+                PyObject *val = get_arg_from_stack((uint64_t*)valptrs[i], m3_GetRetType(func->f, i));
                 PyTuple_SET_ITEM(ret, i, val);
             }
         }
