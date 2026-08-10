@@ -26,7 +26,7 @@ MV_IMPORT_WASM = wat2wasm("""
 
 def test_multivalue_swap():
     env = m3.Environment()
-    rt = env.new_runtime(64)
+    rt = env.new_runtime(1024)
     mod = env.parse_module(MV_SWAP_WASM)
     rt.load(mod)
     swap = rt.find_function('swap')
@@ -37,7 +37,7 @@ def test_multivalue_swap():
 
 def test_multivalue_imported():
     env = m3.Environment()
-    rt = env.new_runtime(64)
+    rt = env.new_runtime(1024)
     mod = env.parse_module(MV_IMPORT_WASM)
     rt.load(mod)
     mod.link_function("env", "swap", "Ii(iI)", lambda a,b: (b,a))
