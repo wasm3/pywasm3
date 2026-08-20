@@ -1,8 +1,13 @@
 #!/usr/bin/env python3
 
-import wasm3
-import os, time, random
+import os
+import random
+import sys
+import time
+
 import pygame
+
+import wasm3
 
 print("WebAssembly demo file provided by Ben Smith (binji)")
 print("Sources: https://github.com/binji/raw-wasm")
@@ -32,7 +37,7 @@ img = pygame.image.frombuffer(region, img_size, "RGBA")
 
 # Prepare PyGame
 
-scr_size = (img_w*4, img_h*4)
+scr_size = (img_w * 4, img_h * 4)
 pygame.init()
 surface = pygame.display.set_mode(scr_size)
 pygame.display.set_caption("Wasm3 Match3")
@@ -46,10 +51,11 @@ prev_input_time = 0
 while True:
     # Process input
     for event in pygame.event.get():
-        if (event.type == pygame.QUIT or
-            (event.type == pygame.KEYDOWN and event.key == pygame.K_ESCAPE)):
+        if event.type == pygame.QUIT or (
+            event.type == pygame.KEYDOWN and event.key == pygame.K_ESCAPE
+        ):
             pygame.quit()
-            quit()
+            sys.exit()
 
     (mouse_x, mouse_y) = pygame.mouse.get_pos()
     mem[0] = mouse_x // 4

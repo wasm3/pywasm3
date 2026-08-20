@@ -8,7 +8,7 @@ SOURCES = glob('wasm3/*.c') + ['m3module.c']
 
 setup(
     name         = "pywasm3",
-    version      = "0.5.0",
+    version      = "0.9.0",
     description  = "The fastest WebAssembly interpreter",
     platforms    = "any",
     url          = "https://github.com/wasm3/pywasm3",
@@ -23,12 +23,15 @@ setup(
         Extension('wasm3', sources=SOURCES, include_dirs=['wasm3'],
         extra_compile_args=['-g0', '-O3',
                             '-fomit-frame-pointer', '-fno-stack-check', '-fno-stack-protector',
-                            '-DDEBUG', '-DNASSERTS', '-Dd_m3RecordBacktraces=1'])
+                            '-DDEBUG', '-DNASSERTS',
+                            '-Dd_m3MaxFunctionStackHeight=16384',
+                            '-Dd_m3HasTypedRefs=1'])
     ],
 
     classifiers  = [
         "Topic :: Software Development :: Libraries :: Python Modules",
-        "Development Status :: 4 - Beta",
+        "Topic :: Software Development :: Interpreters",
+        "Development Status :: 5 - Production/Stable",
         "License :: OSI Approved :: MIT License",
         "Operating System :: POSIX :: Linux",
         "Operating System :: Microsoft :: Windows",

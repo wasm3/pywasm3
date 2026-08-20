@@ -13,12 +13,15 @@ typedef struct {
     PyObject_HEAD
     m3_environment *env;
     IM3Runtime r;
+    PyObject *wasm_bytes;
 } m3_runtime;
 
 typedef struct {
     PyObject_HEAD
     m3_environment *env;
+    m3_runtime *runtime;
     IM3Module m;
+    PyObject *bytes;
     //bool is_gas_metered;
     int64_t total_gas;
     int64_t current_gas;
@@ -28,6 +31,7 @@ typedef struct {
     PyObject_HEAD
     IM3Function f;
     IM3Runtime r;
+    m3_runtime *runtime;
 } m3_function;
 
 static PyObject *M3_Environment_Type;
@@ -64,6 +68,7 @@ static void
 delEnvironment(m3_environment *self)
 {
     m3_FreeEnvironment(self->e);
+    self->e = NULL;
 }
 
 static PyObject *
@@ -104,16 +109,63 @@ get_arg_from_stack(uint64_t *s, M3ValueType type)
     }
 }
 
+static int
+set_tagged_value(M3TaggedValue *tagged, M3ValueType type, PyObject *value)
+{
+    tagged->type = type;
+
+    switch (tagged->type) {
+        case c_m3Type_i32:
+            tagged->value.i32 = PyLong_AsLong(value);
+            break;
+        case c_m3Type_i64:
+            tagged->value.i64 = PyLong_AsLongLong(value);
+            break;
+        case c_m3Type_f32:
+            tagged->value.f32 = PyFloat_AsDouble(value);
+            break;
+        case c_m3Type_f64:
+            tagged->value.f64 = PyFloat_AsDouble(value);
+            break;
+        default:
+            PyErr_Format(PyExc_TypeError, "unknown type %d", (int)tagged->type);
+            return -1;
+    }
+
+    return PyErr_Occurred() ? -1 : 0;
+}
+
 static PyObject *
 M3_Environment_new_runtime(m3_environment *env, PyObject *stack_size_bytes)
 {
     size_t n = PyLong_AsSize_t(stack_size_bytes);
+    if (PyErr_Occurred()) {
+        return NULL;
+    }
+
     m3_runtime *self = PyObject_New(m3_runtime, (PyTypeObject*)M3_Runtime_Type);
     if (!self) return NULL;
     Py_INCREF(env);
     self->env = env;
     self->r = m3_NewRuntime(env->e, n, NULL);
-    return self;
+    self->wasm_bytes = PyList_New(0);
+    if (!self->r || !self->wasm_bytes) {
+        Py_DECREF(self);
+        PyErr_NoMemory();
+        return NULL;
+    }
+    return (PyObject *)self;
+}
+
+static void
+delRuntime(m3_runtime *self)
+{
+    m3_FreeRuntime(self->r);
+    self->r = NULL;
+    Py_XDECREF(self->wasm_bytes);
+    self->wasm_bytes = NULL;
+    Py_XDECREF(self->env);
+    self->env = NULL;
 }
 
 static PyObject *
@@ -121,22 +173,29 @@ M3_Environment_parse_module(m3_environment *env, PyObject *bytes)
 {
     Py_ssize_t size;
     char *data;
-    PyBytes_AsStringAndSize(bytes, &data, &size);
+    if (PyBytes_AsStringAndSize(bytes, &data, &size) < 0) {
+        return NULL;
+    }
+
     IM3Module m;
     M3Result err = m3_ParseModule(env->e, &m, data, size);
     if (err) {
         PyErr_SetString(PyExc_RuntimeError, err);
         return NULL;
     }
-    Py_INCREF(bytes);
-
     m3_module *self = PyObject_New(m3_module, (PyTypeObject*)M3_Module_Type);
-    if (!self) return NULL;
+    if (!self) {
+        m3_FreeModule(m);
+        return NULL;
+    }
+    Py_INCREF(bytes);
     Py_INCREF(env);
     self->env = env;
+    self->runtime = NULL;
     self->m = m;
+    self->bytes = bytes;
     self->total_gas = self->current_gas = 0;
-    return self;
+    return (PyObject *)self;
 }
 
 static PyMethodDef M3_Environment_methods[] = {
@@ -158,11 +217,27 @@ static PyType_Slot M3_Environment_Type_slots[] = {
 static PyObject *
 M3_Runtime_load(m3_runtime *runtime, PyObject *arg)
 {
+    if (!PyObject_TypeCheck(arg, (PyTypeObject *)M3_Module_Type)) {
+        PyErr_SetString(PyExc_TypeError, "load expects a Module");
+        return NULL;
+    }
+
     m3_module *module = (m3_module *)arg;
+    Py_ssize_t byte_ref_index;
+
+    if (PyList_Append(runtime->wasm_bytes, module->bytes) < 0) {
+        return NULL;
+    }
+    byte_ref_index = PyList_GET_SIZE(runtime->wasm_bytes) - 1;
+
     M3Result err = m3_LoadModule(runtime->r, module->m);
     if (err) {
+        PySequence_DelItem(runtime->wasm_bytes, byte_ref_index);
         return formatError(PyExc_RuntimeError, runtime->r, err);
     }
+
+    Py_INCREF(runtime);
+    module->runtime = runtime;
 
     err = m3_LinkRawFunctionEx (module->m, "metering", "usegas", "v(i)", &metering_usegas, module);
     /*if (!err) {
@@ -188,7 +263,8 @@ M3_Runtime_find_function(m3_runtime *runtime, PyObject *name)
 	Py_INCREF(runtime);
     self->f = func;
     self->r = runtime->r;
-    return self;
+    self->runtime = runtime;
+    return (PyObject *)self;
 }
 
 static PyObject *
@@ -217,7 +293,7 @@ static PyMethodDef M3_Runtime_methods[] = {
 
 static PyType_Slot M3_Runtime_Type_slots[] = {
     {Py_tp_doc, "The wasm3.Runtime type"},
-    // {Py_tp_finalize, delRuntime},
+    {Py_tp_finalize, delRuntime},
     // {Py_tp_new, newRuntime},
     {Py_tp_methods, M3_Runtime_methods},
     {0, 0}
@@ -247,6 +323,26 @@ static PyObject *
 Module_getGasUsed(m3_module *self, void * closure)
 {
     return PyFloat_FromDouble((double)(self->total_gas - self->current_gas)/10000.0);
+}
+
+static void
+delModule(m3_module *self)
+{
+    IM3Module module = self->m;
+    m3_runtime *runtime = self->runtime;
+
+    self->m = NULL;
+    self->runtime = NULL;
+
+    if (!runtime) {
+        m3_FreeModule(module);
+    }
+
+    Py_XDECREF(self->bytes);
+    self->bytes = NULL;
+    Py_XDECREF(self->env);
+    self->env = NULL;
+    Py_XDECREF(runtime);
 }
 
 static const char* trapException = "function raised exception";
@@ -330,6 +426,43 @@ M3_Module_link_function(m3_module *self, PyObject *args)
 }
 
 static PyObject *
+M3_Module_link_global(m3_module *self, PyObject *args)
+{
+    if (PyTuple_Size(args) != 3) {
+        PyErr_SetString(PyExc_TypeError, "link_global takes 3 arguments");
+        return NULL;
+    }
+
+    PyObject *mod_name = PyTuple_GET_ITEM(args, 0);
+    PyObject *global_name = PyTuple_GET_ITEM(args, 1);
+    PyObject *value = PyTuple_GET_ITEM(args, 2);
+
+    const char *mod_name_utf8 = PyUnicode_AsUTF8(mod_name);
+    const char *global_name_utf8 = PyUnicode_AsUTF8(global_name);
+    if (!mod_name_utf8 || !global_name_utf8) {
+        return NULL;
+    }
+
+    IM3Global g = m3_FindGlobal(self->m, global_name_utf8);
+    M3ValueType type = m3_GetGlobalType(g);
+    if (type == c_m3Type_none) {
+        return formatError(PyExc_RuntimeError, m3_GetModuleRuntime(self->m), m3Err_globalLookupFailed);
+    }
+
+    M3TaggedValue tagged;
+    if (set_tagged_value(&tagged, type, value) < 0) {
+        return NULL;
+    }
+
+    M3Result err = m3_LinkGlobal(self->m, mod_name_utf8, global_name_utf8, &tagged);
+    if (err) {
+        return formatError(PyExc_RuntimeError, m3_GetModuleRuntime(self->m), err);
+    }
+
+    Py_RETURN_NONE;
+}
+
+static PyObject *
 M3_Module_get_global(m3_module *self, PyObject *name)
 {
     M3TaggedValue tagged;
@@ -360,16 +493,9 @@ M3_Module_set_global(m3_module *self, PyObject *args)
 
     IM3Global g = m3_FindGlobal(self->m, PyUnicode_AsUTF8(name));
 
-    M3TaggedValue tagged = {
-        .type      = m3_GetGlobalType(g)
-    };
-
-    switch (tagged.type) {
-        case c_m3Type_i32:  tagged.value.i32 = PyLong_AsLong(value);        break;
-        case c_m3Type_i64:  tagged.value.i64 = PyLong_AsLongLong(value);    break;
-        case c_m3Type_f32:  tagged.value.f32 = PyFloat_AsDouble(value);     break;
-        case c_m3Type_f64:  tagged.value.f64 = PyFloat_AsDouble(value);     break;
-        default:            return PyErr_Format(PyExc_TypeError, "unknown type %d", (int)tagged.type);
+    M3TaggedValue tagged;
+    if (set_tagged_value(&tagged, m3_GetGlobalType(g), value) < 0) {
+        return NULL;
     }
 
     M3Result err = m3_SetGlobal (g, &tagged);
@@ -392,6 +518,9 @@ static PyMethodDef M3_Module_methods[] = {
     {"link_function", (PyCFunction)M3_Module_link_function,  METH_VARARGS,
         PyDoc_STR("link_function(module, name, signature, function)")},
 
+    {"link_global", (PyCFunction)M3_Module_link_global,  METH_VARARGS,
+        PyDoc_STR("link_global(module, name, value)")},
+
     {"get_global", (PyCFunction)M3_Module_get_global,  METH_O,
         PyDoc_STR("get_global(name) -> value")},
 
@@ -403,7 +532,7 @@ static PyMethodDef M3_Module_methods[] = {
 
 static PyType_Slot M3_Module_Type_slots[] = {
     {Py_tp_doc, "The wasm3.Module type"},
-    // {Py_tp_finalize, delModule},
+    {Py_tp_finalize, delModule},
     // {Py_tp_new, newModule},
     {Py_tp_methods, M3_Module_methods},
     {Py_tp_getset, M3_Module_properties},
@@ -583,6 +712,15 @@ Function_ret_types(m3_function *self, void * closure)
     return ret;
 }
 
+static void
+delFunction(m3_function *self)
+{
+    self->f = NULL;
+    self->r = NULL;
+    Py_XDECREF(self->runtime);
+    self->runtime = NULL;
+}
+
 static PyGetSetDef M3_Function_properties[] = {
     {"name", (getter) Function_name, NULL, "function name", NULL },
     {"num_args", (getter) Function_num_args, NULL, "number of args", NULL },
@@ -600,7 +738,7 @@ static PyMethodDef M3_Function_methods[] = {
 
 static PyType_Slot M3_Function_Type_slots[] = {
     {Py_tp_doc, "The wasm3.Function type"},
-    // {Py_tp_finalize, delFunction},
+    {Py_tp_finalize, delFunction},
     // {Py_tp_new, newFunction},
     {Py_tp_call, M3_Function_call},
     {Py_tp_methods, M3_Function_methods},
@@ -691,4 +829,3 @@ PyInit_wasm3(void)
 {
     return PyModuleDef_Init(&m3module);
 }
-

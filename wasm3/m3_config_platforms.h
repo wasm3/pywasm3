@@ -82,6 +82,29 @@
 #  endif
 # endif
 
+# if !defined(M3_HAS_TAIL_CALL)
+#  if defined(__EMSCRIPTEN__)
+#   define M3_HAS_TAIL_CALL 0
+#  else
+#   define M3_HAS_TAIL_CALL 1
+#  endif
+# endif
+
+# if M3_HAS_TAIL_CALL && M3_COMPILER_HAS_ATTRIBUTE(musttail)
+#   define M3_MUSTTAIL __attribute__((musttail))
+#   define M3_GUARANTEED_TAIL_CALL 1
+# else
+#   define M3_MUSTTAIL
+    // Without musttail a tail call happens only if the compiler feels like emitting one,
+    // and that is not something we can predict: GCC on x86-64 does it at -O3, but on
+    // ppc64 and alpha it does not (indirect sibling calls are restricted by those ABIs),
+    // and MSVC does not reliably anywhere. The interpreter merely runs slower when a
+    // dispatch isn't tail-called, but return_call would lose the frame it reuses -- so
+    // only claim a guarantee when the compiler actually gives one. GCC 15 has musttail.
+    // Builders who know their target sibling-calls can force it with -Dd_m3CanTailCall=1.
+#   define M3_GUARANTEED_TAIL_CALL 0
+# endif
+
 # ifndef M3_MIN
 #  define M3_MIN(A,B) (((A) < (B)) ? (A) : (B))
 # endif
@@ -121,9 +144,9 @@ typedef int8_t          i8;
 # if defined (M3_COMPILER_MSVC)
 #   define vectorcall   // For MSVC, better not to specify any call convention
 # elif defined(__x86_64__)
-#   define vectorcall   __attribute__((aligned(32)))
+#   define vectorcall
 //# elif defined(__riscv) && (__riscv_xlen == 64)
-//#   define vectorcall   __attribute__((aligned(16)))
+//#   define vectorcall
 # elif defined(__MINGW32__)
 #   define vectorcall
 # elif defined(WIN32)
@@ -153,7 +176,7 @@ typedef int8_t          i8;
 
 # ifndef d_m3MaxFunctionStackHeight
 #  if defined(ESP8266) || defined(ESP32) || defined(ARDUINO_AMEBA) || defined(TEENSYDUINO)
-#    define d_m3MaxFunctionStackHeight          128
+#    define d_m3MaxFunctionStackHeight          256
 #  endif
 # endif
 
@@ -183,7 +206,7 @@ typedef int8_t          i8;
 #   define d_m3MaxConstantTableSize             64
 # endif
 #  ifndef d_m3MaxFunctionStackHeight
-#    define d_m3MaxFunctionStackHeight          64
+#    define d_m3MaxFunctionStackHeight          128
 #  endif
 #  ifndef d_m3CodePageAlignSize
 #    define d_m3CodePageAlignSize               1024

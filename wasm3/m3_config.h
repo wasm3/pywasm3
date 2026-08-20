@@ -17,7 +17,7 @@
 # endif
 
 # ifndef d_m3MaxFunctionStackHeight
-#   define d_m3MaxFunctionStackHeight           16384    // max: 32768
+#   define d_m3MaxFunctionStackHeight           2000    // max: 32768
 # endif
 
 # ifndef d_m3MaxLinearMemoryPages
@@ -26,6 +26,14 @@
 
 # ifndef d_m3MaxFunctionSlots
 #   define d_m3MaxFunctionSlots                 ((d_m3MaxFunctionStackHeight)*2)
+# endif
+
+# ifndef d_m3ValStack                                   // validator operand and local type stacks:
+#   define d_m3ValStack                         (d_m3MaxFunctionStackHeight)    // the same operand stack the compiler bounds
+# endif
+
+# ifndef d_m3ValCtrlDepth                               // validator block nesting depth. Each frame is bigger than an
+#   define d_m3ValCtrlDepth                     ((d_m3MaxFunctionStackHeight)/8)// operand entry, so this dominates the validator's stack usage
 # endif
 
 # ifndef d_m3MaxConstantTableSize
@@ -69,6 +77,22 @@
 #   define d_m3EnableExceptionBreakpoint        0       // see m3_exception.h
 # endif
 
+// Backtraces and structured traces need op_Entry to still be around when the function
+// body returns, so it can't tail-call into it.  Everywhere else it can, which keeps the
+// native stack flat across calls -- and is what makes return_call actually iterative.
+# ifndef d_m3EntryKeepsFrame
+#   define d_m3EntryKeepsFrame                  (d_m3RecordBacktraces || (d_m3EnableStrace >= 2))
+# endif
+
+// Whether return_call/return_call_indirect can reuse the caller's frame.  Reusing it stops
+// the m3 stack from growing, so it's only safe where the native stack doesn't grow either
+// -- otherwise runaway tail recursion would blow the native stack with nothing to trap it.
+// Where that doesn't hold they compile to a plain call followed by a return: still
+// correct, just not iterative, and the m3 stack keeps overflowing (and trapping) first.
+# ifndef d_m3CanTailCall
+#   define d_m3CanTailCall                      (!d_m3EntryKeepsFrame && M3_GUARANTEED_TAIL_CALL)
+# endif
+
 
 // profiling and tracing ------------------------------------------------------
 
@@ -80,9 +104,13 @@
 #   define d_m3EnableOpTracing                  0       // only works with DEBUG
 # endif
 
+# ifndef d_m3EnableWasiTracing
+#  define d_m3EnableWasiTracing                 0
+# endif
+
 # ifndef d_m3EnableStrace
 #   define d_m3EnableStrace                     0       // 1 - trace exported function calls
-                                                        // 2 - trace all calls (structured) - requires DEBUG
+                                                        // 2 - trace all calls (structured)
                                                         // 3 - all calls + loops + memory operations
 # endif
 
@@ -139,6 +167,36 @@
 #   define d_m3NoFloatDynamic                   1       // if no floats, do not fail until flops are actually executed
 #endif
 
+// funcref/externref values, the table instructions and multiple tables.
+// Without it a module may still declare one funcref table and use call_indirect.
+# ifndef d_m3HasRefTypes
+#   define d_m3HasRefTypes                      1       // implement the reference types proposal
+# endif
+
+// i32/i64 add, sub and mul inside constant expressions, so a global, data or
+// element offset can be computed from an imported global instead of a literal.
+# ifndef d_m3HasExtendedConst
+#   define d_m3HasExtendedConst                 1       // implement the extended constant expressions proposal
+# endif
+
+// The import section's compact encodings: one module name shared by a run of
+// imports, optionally with one externtype shared as well. Decoding only - a
+// module means exactly what it would spelled out the long way.
+# ifndef d_m3HasCompactImports
+#   define d_m3HasCompactImports                1       // implement the compact import section proposal
+# endif
+
+// (ref $t) and (ref null $t), call_ref and the rest of the typed function
+// references proposal. Off by default: it is not finished, and it widens the
+// value type from one byte to two wherever the compiler carries one.
+# ifndef d_m3HasTypedRefs
+#   define d_m3HasTypedRefs                     0
+# endif
+
+# ifndef d_m3EnableValidation
+#   define d_m3EnableValidation                 1       // pre-pass bytecode type validation
+# endif
+
 # ifndef d_m3SkipStackCheck
 #   define d_m3SkipStackCheck                   0       // skip stack overrun checks
 # endif
@@ -146,5 +204,7 @@
 # ifndef d_m3SkipMemoryBoundsCheck
 #   define d_m3SkipMemoryBoundsCheck            0       // skip memory bounds checks
 # endif
+
+#define d_m3EnableCodePageRefCounting           0       // not supported currently
 
 #endif // m3_config_h

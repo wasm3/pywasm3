@@ -1,8 +1,13 @@
 #!/usr/bin/env python3
 
-import wasm3
-import os, time, random, math, base64
+import base64
+import os
+import random
+import sys
+
 import pygame
+
+import wasm3
 
 print("WebAssembly demo file provided by Ben Smith (binji)")
 print("Sources: https://github.com/binji/raw-wasm")
@@ -34,7 +39,7 @@ ROM = base64.b64decode("""
     B////////wEH////////AQf//////wA=
 """)
 
-mem[0x200:0x200+len(ROM)] = ROM
+mem[0x200 : 0x200 + len(ROM)] = ROM
 
 # Map memory region to an RGBA image
 
@@ -46,7 +51,7 @@ img = pygame.image.frombuffer(region, img_size, "RGBA")
 
 # Prepare PyGame
 
-scr_size = (img_w*8, img_h*8)
+scr_size = (img_w * 8, img_h * 8)
 pygame.init()
 surface = pygame.display.set_mode(scr_size)
 pygame.display.set_caption("Wasm3 CHIP-8")
@@ -57,13 +62,14 @@ clock = pygame.time.Clock()
 while True:
     # Process input
     for event in pygame.event.get():
-        if (event.type == pygame.QUIT or
-            (event.type == pygame.KEYDOWN and event.key == pygame.K_ESCAPE)):
+        if event.type == pygame.QUIT or (
+            event.type == pygame.KEYDOWN and event.key == pygame.K_ESCAPE
+        ):
             pygame.quit()
-            quit()
+            sys.exit()
 
     # TODO: input support
-    #mem[10] = 0
+    # mem[10] = 0
 
     # Render next frame
     wasm_run(500)

@@ -1,5 +1,6 @@
 dist/
+build/
+__pycache__/
 pywasm3.egg-info/
 .pytest*
-__pycache__/
-
+*.so

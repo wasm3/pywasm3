@@ -9,6 +9,74 @@
 #include "m3_info.h"
 #include "m3_compile.h"
 
+#if defined(DEBUG) || (d_m3EnableStrace >= 2)
+
+size_t  SPrintArg  (char * o_string, size_t i_stringBufferSize, voidptr_t i_sp, u8 i_type)
+{
+    int len = 0;
+
+    * o_string = 0;
+
+    if      (i_type == c_m3Type_i32)
+        len = snprintf (o_string, i_stringBufferSize, "%" PRIi32, * (i32 *) i_sp);
+    else if (i_type == c_m3Type_i64)
+        len = snprintf (o_string, i_stringBufferSize, "%" PRIi64, * (i64 *) i_sp);
+#if d_m3HasFloat
+    else if (i_type == c_m3Type_f32)
+        len = snprintf (o_string, i_stringBufferSize, "%" PRIf32, * (f32 *) i_sp);
+    else if (i_type == c_m3Type_f64)
+        len = snprintf (o_string, i_stringBufferSize, "%" PRIf64, * (f64 *) i_sp);
+#endif
+
+    len = M3_MAX (0, len);
+
+    return len;
+}
+
+
+cstr_t  SPrintFunctionArgList  (IM3Function i_function, m3stack_t i_sp)
+{
+    int ret;
+    static char string [256];
+
+    char * s = string;
+    ccstr_t e = string + sizeof(string) - 1;
+
+    ret = snprintf (s, e-s, "(");
+    s += M3_MAX (0, ret);
+
+    u64 * argSp = (u64 *) i_sp;
+
+    IM3FuncType funcType = i_function->funcType;
+    if (funcType)
+    {
+        u32 numArgs = funcType->numArgs;
+
+        for (u32 i = 0; i < numArgs; ++i)
+        {
+            u8 type = d_FuncArgType(funcType, i);
+
+            ret = snprintf (s, e-s, "%s: ", c_waTypes [BaseTypeOf(type)]);
+            s += M3_MAX (0, ret);
+
+            s += SPrintArg (s, e-s, argSp + i, type);
+
+            if (i != numArgs - 1) {
+                ret = snprintf (s, e-s, ", ");
+                s += M3_MAX (0, ret);
+            }
+        }
+    }
+    else printf ("null signature");
+
+    ret = snprintf (s, e-s, ")");
+    s += M3_MAX (0, ret);
+
+    return string;
+}
+
+#endif
+
 #ifdef DEBUG
 
 // a central function you can be breakpoint:
@@ -30,7 +98,7 @@ void  m3_PrintM3Info  ()
 {
     printf ("\n-- m3 configuration --------------------------------------------\n");
 //  printf (" sizeof M3CodePage    : %zu bytes  (%d slots) \n", sizeof (M3CodePage), c_m3CodePageNumSlots);
-    printf (" sizeof M3MemPage     : %u bytes              \n", d_m3MemPageSize);
+    printf (" sizeof M3MemPage     : %u bytes              \n", d_m3DefaultMemPageSize);
     printf (" sizeof M3Compilation : %zu bytes             \n", sizeof (M3Compilation));
     printf (" sizeof M3Function    : %zu bytes             \n", sizeof (M3Function));
     printf ("----------------------------------------------------------------\n\n");
@@ -58,10 +126,10 @@ void  m3_PrintRuntimeInfo  (IM3Runtime i_runtime)
 }
 
 
-cstr_t  GetTypeName  (u8 i_m3Type)
+cstr_t  GetTypeName  (m3type_t i_m3Type)
 {
     if (i_m3Type < 5)
-        return c_waTypes [i_m3Type];
+        return c_waTypes [BaseTypeOf(i_m3Type)];
     else
         return "?";
 }
@@ -98,75 +166,10 @@ cstr_t  SPrintFuncTypeSignature  (IM3FuncType i_funcType)
 }
 
 
-size_t  SPrintArg  (char * o_string, size_t i_stringBufferSize, voidptr_t i_sp, u8 i_type)
-{
-    int len = 0;
-
-    * o_string = 0;
-
-    if      (i_type == c_m3Type_i32)
-        len = snprintf (o_string, i_stringBufferSize, "%" PRIi32, * (i32 *) i_sp);
-    else if (i_type == c_m3Type_i64)
-        len = snprintf (o_string, i_stringBufferSize, "%" PRIi64, * (i64 *) i_sp);
-#if d_m3HasFloat
-    else if (i_type == c_m3Type_f32)
-        len = snprintf (o_string, i_stringBufferSize, "%" PRIf32, * (f32 *) i_sp);
-    else if (i_type == c_m3Type_f64)
-        len = snprintf (o_string, i_stringBufferSize, "%" PRIf64, * (f64 *) i_sp);
-#endif
-
-    len = M3_MAX (0, len);
-
-    return len;
-}
-
-
 cstr_t  SPrintValue  (void * i_value, u8 i_type)
 {
     static char string [100];
     SPrintArg (string, 100, (m3stack_t) i_value, i_type);
-    return string;
-}
-
-
-cstr_t  SPrintFunctionArgList  (IM3Function i_function, m3stack_t i_sp)
-{
-    int ret;
-    static char string [256];
-
-    char * s = string;
-    ccstr_t e = string + sizeof(string) - 1;
-
-    ret = snprintf (s, e-s, "(");
-    s += M3_MAX (0, ret);
-
-    u64 * argSp = (u64 *) i_sp;
-
-    IM3FuncType funcType = i_function->funcType;
-    if (funcType)
-    {
-        u32 numArgs = funcType->numArgs;
-
-        for (u32 i = 0; i < numArgs; ++i)
-        {
-            u8 type = d_FuncArgType(funcType, i);
-
-            ret = snprintf (s, e-s, "%s: ", c_waTypes [type]);
-            s += M3_MAX (0, ret);
-
-            s += SPrintArg (s, e-s, argSp + i, type);
-
-            if (i != numArgs - 1) {
-                ret = snprintf (s, e-s, ", ");
-                s += M3_MAX (0, ret);
-            }
-        }
-    }
-    else printf ("null signature");
-
-    ret = snprintf (s, e-s, ")");
-    s += M3_MAX (0, ret);
-
     return string;
 }
 
@@ -177,24 +180,22 @@ OpInfo find_operation_info  (IM3Operation i_operation)
 
     if (!i_operation) return opInfo;
 
+    // Scans the table directly rather than through GetOpInfo (), which rejects
+    // the reserved slots and the internal operations kept past the last opcode.
     // TODO: find also extended opcodes
-    for (u32 i = 0; i <= 0xff; ++i)
+    for (u32 i = 0; i < c_numOperations; ++i)
     {
-        IM3OpInfo oi = GetOpInfo (i);
+        IM3OpInfo oi = & c_operations [i];
 
-        if (oi->type != c_m3Type_unknown)
+        for (u32 o = 0; o < 4; ++o)
         {
-            for (u32 o = 0; o < 4; ++o)
+            if (oi->operations [o] == i_operation)
             {
-                if (oi->operations [o] == i_operation)
-                {
-                    opInfo.info = oi;
-                    opInfo.opcode = i;
-                    break;
-                }
+                opInfo.info = oi;
+                opInfo.opcode = i;
+                return opInfo;
             }
         }
-        else break;
     }
 
     return opInfo;
@@ -356,7 +357,7 @@ void  dump_type_stack  (IM3Compilation o)
     {
         d_m3Log(stack, "        ");
 
-        for (u32 i = 0; i < o->stackIndex; ++i)
+        for (u16 i = 0; i < o->stackIndex; ++i)
         {
             if (i > 0 and i == o->stackFirstDynamicIndex)
                 printf ("#");
@@ -364,7 +365,7 @@ void  dump_type_stack  (IM3Compilation o)
             if (i == o->block.blockStackIndex)
                 printf (">");
 
-            const char * type = c_waCompactTypes [o->typeStack [i]];
+            const char * type = c_waCompactTypes [BaseTypeOf(o->typeStack [i])];
 
             const char * location = "";
 

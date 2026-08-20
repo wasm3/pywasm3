@@ -43,6 +43,14 @@ ADD_WASM = wat2wasm("""
 )
 """)
 
+GLOBAL_IMPORT_WASM = wat2wasm("""
+(module
+  (import "environment" "SAMPLERATE" (global $SAMPLERATE f32))
+  (func (export "samplerate") (result f32)
+    global.get $SAMPLERATE)
+)
+""")
+
 
 def test_classes():
     assert isinstance(m3.Environment, type)
@@ -83,6 +91,17 @@ def test_callback_member():
 
     inst = WasmRunner(CALLBACK_WASM)
     assert inst.run_callback(987, 654) == 987+654
+
+def test_link_global():
+    env = m3.Environment()
+    rt = env.new_runtime(1024)
+    mod = env.parse_module(GLOBAL_IMPORT_WASM)
+
+    mod.link_global("environment", "SAMPLERATE", 22050)
+    rt.load(mod)
+
+    samplerate = rt.find_function("samplerate")
+    assert samplerate() == pytest.approx(22050.0)
 
 def test_m3(capfd):
     env = m3.Environment()
@@ -133,4 +152,3 @@ def test_fib64():
     assert call_function(FIB64_WASM, 'fib', '10') == 55
     # TODO: Fails on 3.6, 3.7 ?
     #assert call_function(FIB64_WASM, 'fib', '90') == 2880067194370816120
-

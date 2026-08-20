@@ -1,8 +1,12 @@
 #!/usr/bin/env python3
 
-import wasm3
-import os, time, random
+import os
+import random
+import sys
+
 import pygame
+
+import wasm3
 
 print("WebAssembly demo file provided by Ben Smith (binji)")
 print("Sources: https://github.com/binji/raw-wasm")
@@ -32,7 +36,7 @@ img = pygame.image.frombuffer(region, img_size, "RGBA")
 
 # Prepare PyGame
 
-scr_size = (img_w*4, img_h*4)
+scr_size = (img_w * 4, img_h * 4)
 pygame.init()
 surface = pygame.display.set_mode(scr_size)
 pygame.display.set_caption("Wasm3 Dino")
@@ -46,21 +50,22 @@ clock = pygame.time.Clock()
 while True:
     # Process input
     for event in pygame.event.get():
-        if (event.type == pygame.QUIT or
-            (event.type == pygame.KEYDOWN and event.key == pygame.K_ESCAPE)):
+        if event.type == pygame.QUIT or (
+            event.type == pygame.KEYDOWN and event.key == pygame.K_ESCAPE
+        ):
             pygame.quit()
-            quit()
+            sys.exit()
         elif event.type == pygame.KEYDOWN or event.type == pygame.KEYUP:
             if event.key == pygame.K_UP:
-                k_jump = (event.type == pygame.KEYDOWN)
+                k_jump = event.type == pygame.KEYDOWN
             elif event.key == pygame.K_DOWN:
-                k_duck = (event.type == pygame.KEYDOWN)
+                k_duck = event.type == pygame.KEYDOWN
 
     mem[0] = 0
     if k_jump:
-        mem[0] |= 0x1       # Jump flag
+        mem[0] |= 0x1  # Jump flag
     if k_duck:
-        mem[0] |= 0x2       # Duck flag
+        mem[0] |= 0x2  # Duck flag
 
     # Render next frame
     wasm_run()

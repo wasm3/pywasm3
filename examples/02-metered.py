@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
 
+import os
+import time
+
 import wasm3
-import os, time
 
 """
   NOTE: Gas metering/limit only applies to pre-instrumented modules.
@@ -14,8 +16,10 @@ wasm_fn = os.path.join(scriptpath, "./wasm/coremark-metered.wasm")
 
 print("Initializing Wasm3 engine...")
 
+
 def clock_ms():
-    return int(round(time.time() * 1000))
+    return int(time.time() * 1000)
+
 
 env = wasm3.Environment()
 rt = env.new_runtime(4096)
@@ -23,7 +27,7 @@ rt = env.new_runtime(4096)
 with open(wasm_fn, "rb") as f:
     mod = env.parse_module(f.read())
     rt.load(mod)
-    mod.link_function("env", "clock_ms",    "I()",  clock_ms)
+    mod.link_function("env", "clock_ms", "I()", clock_ms)
 
 # Gas metering will only apply to metered (pre-instrumented) modules
 mod.gasLimit = 500_000_000
@@ -41,4 +45,3 @@ try:
 finally:
     if mod.gasUsed:
         print(f"Gas used: {mod.gasUsed}")
-

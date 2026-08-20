@@ -1,8 +1,14 @@
 #!/usr/bin/env python3
 
-import wasm3
-import os, time, random, math
+import math
+import os
+import random
+import sys
+import time
+
 import pygame
+
+import wasm3
 
 print("WebAssembly demo file provided by Ben Smith (binji)")
 print("Sources: https://github.com/binji/raw-wasm")
@@ -10,8 +16,10 @@ print("Sources: https://github.com/binji/raw-wasm")
 scriptpath = os.path.dirname(os.path.realpath(__file__))
 wasm_fn = os.path.join(scriptpath, "./wasm/maze.wasm")
 
+
 def env_t(start):
     pass
+
 
 # Prepare Wasm3 engine
 
@@ -20,9 +28,9 @@ rt = env.new_runtime(1024)
 with open(wasm_fn, "rb") as f:
     mod = env.parse_module(f.read())
     rt.load(mod)
-    mod.link_function("Math", "sin",    math.sin)
+    mod.link_function("Math", "sin", math.sin)
     mod.link_function("Math", "random", random.random)
-    mod.link_function("env",  "t",      env_t)
+    mod.link_function("env", "t", env_t)
 
 wasm_run = rt.find_function("run")
 mem = rt.get_memory(0)
@@ -37,15 +45,15 @@ img = pygame.image.frombuffer(region, img_size, "RGBA")
 
 # Prepare PyGame
 
-scr_size = (img_w*2, img_h*2)
+scr_size = (img_w * 2, img_h * 2)
 pygame.init()
 surface = pygame.display.set_mode(scr_size)
 pygame.display.set_caption("Wasm3 Maze")
 white = (255, 255, 255)
 
-k_up    = False
-k_down  = False
-k_left  = False
+k_up = False
+k_down = False
+k_left = False
 k_right = False
 
 clock = pygame.time.Clock()
@@ -56,12 +64,13 @@ prev_input_time = 0
 while True:
     # Process input
     for event in pygame.event.get():
-        if (event.type == pygame.QUIT or
-            (event.type == pygame.KEYDOWN and event.key == pygame.K_ESCAPE)):
+        if event.type == pygame.QUIT or (
+            event.type == pygame.KEYDOWN and event.key == pygame.K_ESCAPE
+        ):
             pygame.quit()
-            quit()
+            sys.exit()
         elif event.type == pygame.KEYDOWN or event.type == pygame.KEYUP:
-            is_pressed = (event.type == pygame.KEYDOWN)
+            is_pressed = event.type == pygame.KEYDOWN
             if event.key == pygame.K_UP:
                 k_up = is_pressed
             elif event.key == pygame.K_DOWN:
@@ -75,7 +84,7 @@ while True:
     mem[1] = k_right
     mem[2] = k_up
     mem[3] = k_down
-    
+
     # Stop rendering if no interaction for 10 seconds
     inp = tuple(mem[0:3])
     if inp != prev_input:

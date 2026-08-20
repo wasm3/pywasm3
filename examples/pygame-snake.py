@@ -1,8 +1,13 @@
 #!/usr/bin/env python3
 
-import wasm3
-import os, time, random, math
+import math
+import os
+import random
+import sys
+
 import pygame
+
+import wasm3
 
 print("WebAssembly demo file provided by Ben Smith (binji)")
 print("Sources: https://github.com/binji/raw-wasm")
@@ -33,13 +38,13 @@ img = pygame.image.frombuffer(region, img_size, "RGBA")
 
 # Prepare PyGame
 
-scr_size = (img_w*2, img_h*2)
+scr_size = (img_w * 2, img_h * 2)
 pygame.init()
 surface = pygame.display.set_mode(scr_size)
 pygame.display.set_caption("Wasm3 Snake")
 white = (255, 255, 255)
 
-k_left  = False
+k_left = False
 k_right = False
 
 clock = pygame.time.Clock()
@@ -47,19 +52,20 @@ clock = pygame.time.Clock()
 while True:
     # Process input
     for event in pygame.event.get():
-        if (event.type == pygame.QUIT or
-            (event.type == pygame.KEYDOWN and event.key == pygame.K_ESCAPE)):
+        if event.type == pygame.QUIT or (
+            event.type == pygame.KEYDOWN and event.key == pygame.K_ESCAPE
+        ):
             pygame.quit()
-            quit()
+            sys.exit()
         elif event.type == pygame.KEYDOWN or event.type == pygame.KEYUP:
-            is_pressed = (event.type == pygame.KEYDOWN)
+            is_pressed = event.type == pygame.KEYDOWN
             if event.key == pygame.K_LEFT:
                 k_left = is_pressed
             elif event.key == pygame.K_RIGHT:
                 k_right = is_pressed
 
-    mem[0x2c0] = k_left
-    mem[0x2c1] = k_right
+    mem[0x2C0] = k_left
+    mem[0x2C1] = k_right
 
     # Render next frame
     wasm_run()
