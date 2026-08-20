@@ -88,7 +88,6 @@ def virtual_size_write(data):
 
 
 def virtual_draw_write(data):
-    global img
     img_scaled = pygame.transform.scale(img, scr_size)
     surface.blit(img_scaled, (0, 0))
     pygame.display.flip()
@@ -292,7 +291,7 @@ def clock_time_get(clk_id, precision, result):
 
 @wasi_generic_api
 def poll_oneoff(ev_in, ev_out, subs, evts):
-    mem = rt.get_memory(0)
+    #mem = rt.get_memory(0)
     clock.tick(60)
     return WasiErrno.SUCCESS
 
