@@ -1,7 +1,6 @@
-import wasm3 as m3
-import pytest
-
 from helpers import wat2wasm
+
+import wasm3 as m3
 
 DYN_CALLBACK_WASM = wat2wasm("""
 (module
@@ -39,6 +38,7 @@ DYN_CALLBACK_WASM = wat2wasm("""
   (elem (global.get $env.__table_base) func $f2 $f3))
 """)
 
+
 def test_dynamic_callback():
     env = m3.Environment()
     rt = env.new_runtime(1024)
@@ -64,8 +64,8 @@ def test_dynamic_callback():
     # Recursive exported function call (single calls)
     call_pass_fptr = rt.find_function("call_pass_fptr")
     base = 0
-    call_pass_fptr(base+0)
-    call_pass_fptr(base+1)
+    call_pass_fptr(base + 0)
+    call_pass_fptr(base + 1)
 
     # Recursive exported function call (multiple calls)
     rt.find_function("run_test")()

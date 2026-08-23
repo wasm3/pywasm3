@@ -1,0 +1,267 @@
+name: Build and Publish
+
+on:
+  push:
+    tags:
+      - "v*"
+  pull_request:
+    branches: [main]
+    paths-ignore:
+      - "**.md"
+      - "LICENSE"
+  workflow_dispatch:
+    inputs:
+      testpypi:
+        description: "Publish to test pypi"
+        required: false
+        type: boolean
+        default: false
+      version:
+        description: "Override version (e.g. 2.3.0b1) — required for TestPyPI to get a clean version instead of a dev suffix"
+        required: false
+        type: string
+        default: ""
+
+# pull_request here is deliberately build-only (see the deploy job's own environment/if:
+# conditions below - none of them match a pull_request event, so no publish permissions are ever
+# granted or used) - it exists to catch cibuildwheel-matrix-specific breakage before it ships,
+# instead of only ever surfacing at actual release time.
+run-name: >
+  Build & Publish → ${{ startsWith(github.ref, 'refs/tags/v') && 'PyPI' ||
+      github.event_name == 'workflow_dispatch' && inputs.testpypi && 'TestPyPI' ||
+      'Build Only' }}
+
+concurrency:
+  group: publish-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: write
+
+jobs:
+  build-sdist:
+    name: SDist
+    runs-on: ubuntu-latest
+    env:
+      SETUPTOOLS_SCM_PRETEND_VERSION: ${{ inputs.version }}
+      # setuptools_scm/vcs_versioning first tries SETUPTOOLS_SCM_OVERRIDES_FOR_<DIST>
+      # (dist name canonicalized, e.g. PYWASM3), then falls back to this un-scoped
+      # SETUPTOOLS_SCM_OVERRIDES for any dist without its own var.
+      # Only strip the local version (+g<hash>) when this run will actually publish —
+      # PyPI/TestPyPI reject local version segments; build-only runs keep it for traceability.
+      SETUPTOOLS_SCM_OVERRIDES: ${{ (startsWith(github.ref, 'refs/tags/v') || inputs.testpypi) && '{local_scheme = "no-local-version"}' || '' }}
+
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0 # required for setuptools-scm to see tags
+          submodules: recursive # the sdist carries wasm3's sources
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
+        with:
+          python-version: "3.11"
+          github-token: ${{ github.token }}
+
+      - name: Build sdist
+        run: uv build --sdist --out-dir dist
+        shell: bash
+
+      - name: list ./dist
+        run: ls ./dist
+        shell: bash
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v7
+        with:
+          name: dist-sdist
+          path: ./dist
+          retention-days: 14
+
+  build-wheels:
+    name: "Wheels: ${{ matrix.name }}"
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Linux x64 / x86
+            artifact_key: linux-x64-x86
+            os: ubuntu-latest
+            cibw_archs: "i686,x86_64" # x64 native, i686 over QEMU
+            cibw_platform: linux
+            needs_qemu: true
+
+          - name: Linux ARM64 / ARMv7
+            artifact_key: linux-arm64-armv7
+            os: ubuntu-24.04-arm
+            cibw_archs: "aarch64,armv7l"
+            cibw_platform: linux
+            needs_qemu: false
+
+          - name: Windows x64 / x86
+            artifact_key: windows-x64-x86
+            os: windows-latest
+            cibw_archs: "x86,AMD64"
+            cibw_platform: windows
+            needs_qemu: false
+
+          - name: Windows ARM64
+            artifact_key: windows-arm64
+            os: windows-11-arm
+            cibw_archs: "ARM64"
+            cibw_platform: windows
+            needs_qemu: false
+
+          - name: macOS Apple Silicon
+            artifact_key: macos-arm64
+            os: macos-26
+            cibw_archs: "arm64,universal2"
+            cibw_platform: macos
+            needs_qemu: false
+
+          - name: macOS Intel
+            artifact_key: macos-x86_64
+            os: macos-26-intel
+            cibw_archs: "x86_64"
+            cibw_platform: macos
+            needs_qemu: false
+
+          - name: Android ARM64 / x64
+            artifact_key: android-arm64_v8a-x86_64
+            os: ubuntu-latest
+            cibw_archs: "arm64_v8a,x86_64"
+            cibw_platform: android
+            needs_qemu: false
+
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0 # required for setuptools-scm to see tags
+          submodules: recursive # external/wasm3
+
+      - name: Set up QEMU for Emulated Architectures
+        if: ${{ matrix.needs_qemu }}
+        uses: docker/setup-qemu-action@v4
+        with:
+          platforms: all
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
+        with:
+          github-token: ${{ github.token }}
+
+      - name: Build binary python package
+        env:
+          SETUPTOOLS_SCM_PRETEND_VERSION: ${{ inputs.version }}
+          # see SETUPTOOLS_SCM_OVERRIDES comment in build-sdist.
+          # Must also be listed in CIBW_ENVIRONMENT_PASS below, otherwise it never reaches
+          # container-based builds (e.g. manylinux via Docker) — only Windows/macOS/Android
+          # inherit the full host environment automatically.
+          SETUPTOOLS_SCM_OVERRIDES: ${{ (startsWith(github.ref, 'refs/tags/v') || inputs.testpypi) && '{local_scheme = "no-local-version"}' || '' }}
+          CIBW_ENVIRONMENT_PASS: SETUPTOOLS_SCM_PRETEND_VERSION SETUPTOOLS_SCM_OVERRIDES
+        run: |
+          uvx cibuildwheel \
+            --output-dir wheelhouse \
+            --platform ${{ matrix.cibw_platform || 'auto' }} \
+            --archs ${{ matrix.cibw_archs }}
+        shell: bash
+
+      - name: list ./wheelhouse
+        run: ls ./wheelhouse
+        shell: bash
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v7
+        with:
+          name: dist-wheels-${{ matrix.artifact_key }}
+          path: ./wheelhouse
+          retention-days: 14
+
+  deploy:
+    needs: [build-sdist, build-wheels]
+    runs-on: ubuntu-latest
+
+    # Dynamic: real PyPI on a tag push, TestPyPI on an explicit opt-in dispatch, otherwise just a
+    # build (no publish permissions needed/granted for that last case).
+    environment: ${{ startsWith(github.ref, 'refs/tags/v') && 'pypi' ||
+      (github.event_name == 'workflow_dispatch' && inputs.testpypi) && 'testpypi' || 'build' }}
+    permissions:
+      # job-level permissions replace (not merge with) the workflow-level block above,
+      # so everything this job needs must be listed here explicitly.
+      contents: write # required to create the GitHub Release
+      # IMPORTANT: this permission is mandatory for trusted publishing
+      id-token: write
+
+    steps:
+      - uses: actions/checkout@v7
+        # No `ref:` override: actions/checkout's default already resolves correctly for every
+        # event this workflow handles - refs/pull/<PR>/merge on the base repo for pull_request
+        # (fork-safe, unlike using github.head_ref which names a branch that only exists on the
+        # fork), the tag ref for a tag push, and the selected ref for workflow_dispatch.
+
+      - name: Download all artifacts dynamically
+        uses: actions/download-artifact@v8
+        with:
+          pattern: dist-*
+          path: ./all-dist
+
+      - name: Combine artifacts
+        run: |
+          mkdir -p dist
+          find ./all-dist -type f -exec cp {} dist/ \;
+        shell: bash
+
+      - name: list ./dist
+        run: ls ./dist
+        shell: bash
+
+      - name: Resolve tag and version
+        id: meta
+        run: |
+          TAG="${{ github.ref_name }}"
+          VERSION="${TAG#v}"
+          if [[ "$VERSION" =~ (alpha|beta|pre|rc) ]]; then
+            PRERELEASE=true
+          else
+            PRERELEASE=false
+          fi
+          echo "tag=$TAG"               >> $GITHUB_OUTPUT
+          echo "version=$VERSION"       >> $GITHUB_OUTPUT
+          echo "prerelease=$PRERELEASE" >> $GITHUB_OUTPUT
+
+      - name: Extract changelog section
+        id: changelog
+        run: |
+          VERSION=${{ steps.meta.outputs.version }}
+          BODY=$(awk "/^## \[${VERSION}\]/{found=1; next} /^## \[/{found=0} found" CHANGELOG.md | sed '/^[[:space:]]*$/d' | head -50)
+          if [ -z "$BODY" ]; then
+            BODY="See [CHANGELOG.md](https://github.com/${{ github.repository }}/blob/main/CHANGELOG.md) for details."
+          fi
+          echo "body<<EOF" >> $GITHUB_OUTPUT
+          echo "$BODY" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+
+      - name: Create GitHub Release
+        if: ${{ startsWith(github.ref, 'refs/tags/v') }}
+        uses: softprops/action-gh-release@v3
+        with:
+          tag_name: ${{ steps.meta.outputs.tag }}
+          name: ${{ steps.meta.outputs.tag }}
+          body: ${{ steps.changelog.outputs.body }}
+          prerelease: ${{ steps.meta.outputs.prerelease }}
+          files: ./dist/*
+
+      - name: Publish package distributions to PyPI
+        if: ${{ startsWith(github.ref, 'refs/tags/v') }}
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          skip-existing: true
+
+      - name: Publish package distributions to TestPyPI
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.testpypi == true }}
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          skip-existing: true
+          repository-url: https://test.pypi.org/legacy/

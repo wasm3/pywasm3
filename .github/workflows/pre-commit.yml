@@ -1,0 +1,111 @@
+name: Pre-commit
+
+on:
+  push:
+    paths-ignore: &non-code-paths
+      - "**.md"
+      - "LICENSE"
+  pull_request:
+    paths-ignore: *non-code-paths
+  workflow_dispatch:
+  workflow_call:
+
+concurrency:
+  group: pre-commit-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: write
+
+jobs:
+  pre-commit:
+    name: pre-commit run --all-files
+    runs-on: ${{ matrix.os }}
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    strategy:
+      # false: a windows/macos failure must NOT cancel the ubuntu leg mid-run -- ubuntu is
+      # the only leg that commits+pushes auto-fixes (see comment below), so cancelling it
+      # early means the fix never lands and every leg just fails outright instead of
+      # getting fixed. windows/macos legs failing here is expected on the same run the fix
+      # commit is produced; they re-run clean once that push triggers a fresh workflow run.
+      fail-fast: false
+      max-parallel: 10
+      matrix:
+        os:
+          - ubuntu-latest
+          - windows-latest
+          - macos-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          submodules: recursive # external/wasm3
+          ref: ${{ github.head_ref || github.ref_name }}
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
+        with:
+          python-version: "3.11"
+          github-token: ${{ github.token }}
+
+      # Only ubuntu runs the full suite: without wat2wasm the WAT-based modules skip
+      # themselves, so the other legs cover ruff/pyright and build portability.
+      - name: Install wabt
+        if: matrix.os == 'ubuntu-latest'
+        run: sudo apt-get update && sudo apt-get install -y wabt
+
+      - name: Install pre-commit
+        run: uv tool install pre-commit
+
+      # Non-ubuntu legs just check -- see the ubuntu-only auto-fix flow below.
+      - name: Run pre-commit
+        if: matrix.os != 'ubuntu-latest'
+        run: pre-commit run --all-files --show-diff-on-failure
+
+      # Auto-fix (commit + push) only runs from the ubuntu-latest leg: the fix itself
+      # (ruff) is OS-independent, so all three legs pushing back would just race and
+      # conflict. windows/macos re-run clean once the fix commit lands.
+      - name: Run pre-commit (auto-fixable)
+        id: first_run
+        if: matrix.os == 'ubuntu-latest'
+        continue-on-error: true
+        run: pre-commit run --all-files --show-diff-on-failure
+
+      - name: Check for changes
+        id: diff
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          if [ -n "$(git status --porcelain)" ]; then
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Fail (no auto-fixable changes, but hooks failed)
+        if: matrix.os == 'ubuntu-latest' && steps.diff.outputs.changed == 'false' && steps.first_run.outcome == 'failure'
+        run: exit 1
+
+      - name: Fail (changes produced, but not on a pull_request)
+        if: matrix.os == 'ubuntu-latest' && steps.diff.outputs.changed == 'true' && github.event_name != 'pull_request'
+        run: |
+          echo "pre-commit modified files, but auto-commit only runs on pull_request events."
+          exit 1
+
+      - name: Re-run pre-commit after auto-fixes
+        id: verify_run
+        if: matrix.os == 'ubuntu-latest' && steps.diff.outputs.changed == 'true' && github.event_name == 'pull_request'
+        continue-on-error: true
+        run: pre-commit run --all-files --show-diff-on-failure
+
+      - name: Fail (issues remain after auto-fix)
+        if: matrix.os == 'ubuntu-latest' && steps.diff.outputs.changed == 'true' && github.event_name == 'pull_request' && steps.verify_run.outcome == 'failure'
+        run: exit 1
+
+      - name: Commit and push auto-fixes
+        if: matrix.os == 'ubuntu-latest' && steps.diff.outputs.changed == 'true' && github.event_name == 'pull_request' && steps.verify_run.outcome == 'success'
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "style: auto-fix via pre-commit"
+          git push origin HEAD:${{ github.head_ref || github.ref_name }}

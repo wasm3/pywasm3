@@ -1,0 +1,64 @@
+default_install_hook_types: [pre-commit]
+default_language_version:
+  python: python3
+
+repos:
+  - repo: local
+    hooks:
+      - id: uv-lock
+        name: uv lock
+        entry: uv
+        args: ["lock", "--upgrade"]
+        language: system
+        pass_filenames: false
+
+      - id: uv-sync
+        name: uv sync before hooks
+        entry: uv
+        args: ["sync"]
+        language: system
+        pass_filenames: false
+        files: '^(pyproject\.toml|uv\.lock|setup\.py)$|\.(py|pyi|c|h)$'
+
+      - id: uv-ruff-check
+        name: ruff lint & fix
+        entry: uv
+        args: ["run", "ruff", "check", "--fix"]
+        language: system
+        pass_filenames: false
+        files: '\.(py|pyi)$'
+
+      - id: uv-ruff-format
+        name: ruff format
+        entry: uv
+        args: ["run", "ruff", "format"]
+        language: system
+        pass_filenames: false
+        files: '\.(py|pyi)$'
+
+      - id: uv-pyright
+        name: pyright
+        entry: uv
+        args: ["run", "pyright"]
+        language: system
+        pass_filenames: false
+        files: '\.(py|pyi)$'
+
+      # Rebuilds the extension when the C source changes (uv sync above only reinstalls on
+      # metadata changes), then runs the suite against it.
+      - id: uv-pytest
+        name: uv run pytest
+        entry: uv
+        args: ["run", "--reinstall", "pytest"]
+        language: system
+        pass_filenames: false
+        files: '\.(py|pyi|c|h)$|^(pyproject\.toml|setup\.py|uv\.lock)$'
+
+  - repo: https://github.com/codespell-project/codespell
+    rev: v2.4.1
+    hooks:
+      - id: codespell
+        # The wasm3 submodule is upstream's code, not ours to spellcheck.
+        exclude: '^external/'
+        # gameboy/woh: a console's name and a local variable in examples/, not typos.
+        args: ["--ignore-words-list=gameboy,woh"]
