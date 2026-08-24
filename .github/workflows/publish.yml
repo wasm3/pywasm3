@@ -4,6 +4,8 @@ on:
   push:
     tags:
       - "v*"
+    branches:
+      - "**"
   pull_request:
     branches: [main]
     paths-ignore:
@@ -22,10 +24,10 @@ on:
         type: string
         default: ""
 
-# pull_request here is deliberately build-only (see the deploy job's own environment/if:
-# conditions below - none of them match a pull_request event, so no publish permissions are ever
-# granted or used) - it exists to catch cibuildwheel-matrix-specific breakage before it ships,
-# instead of only ever surfacing at actual release time.
+# pull_request and branch pushes here are deliberately build-only (see the deploy job's own
+# environment/if: conditions below - none of them match those events, so no publish permissions
+# are ever granted or used) - they exist to catch cibuildwheel-matrix-specific breakage before it
+# ships, instead of only ever surfacing at actual release time.
 run-name: >
   Build & Publish → ${{ startsWith(github.ref, 'refs/tags/v') && 'PyPI' ||
       github.event_name == 'workflow_dispatch' && inputs.testpypi && 'TestPyPI' ||
