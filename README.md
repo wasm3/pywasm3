@@ -94,7 +94,7 @@ This project is released under The MIT License (MIT)
 <!-- REUSABLE LINKS -->
 
 [license]:
-https://img.shields.io/github/license/o-murphy/pywasm3
+https://img.shields.io/github/license/wasm3/pywasm3
 
 [license-url]:
 https://opensource.org/licenses/MIT
@@ -109,19 +109,19 @@ https://img.shields.io/pypi/pyversions/pywasm3?logo=python
 https://pypi.org/project/pywasm3/
 
 [Pre-commit]:
-https://github.com/o-murphy/pywasm3/actions/workflows/pre-commit.yml/badge.svg
+https://github.com/wasm3/pywasm3/actions/workflows/pre-commit.yml/badge.svg
 
 [pre-commit-workflow]:
-https://github.com/o-murphy/pywasm3/actions/workflows/pre-commit.yml
+https://github.com/wasm3/pywasm3/actions/workflows/pre-commit.yml
 
 [Publish]:
-https://github.com/o-murphy/pywasm3/actions/workflows/publish.yml/badge.svg
+https://github.com/wasm3/pywasm3/actions/workflows/publish.yml/badge.svg
 
 [publish-workflow]:
-https://github.com/o-murphy/pywasm3/actions/workflows/publish.yml
+https://github.com/wasm3/pywasm3/actions/workflows/publish.yml
 
 [coverage]:
-https://codecov.io/gh/o-murphy/pywasm3/graph/badge.svg
+https://codecov.io/gh/wasm3/pywasm3/graph/badge.svg
 
 [CodecovUrl]:
-https://codecov.io/gh/o-murphy/pywasm3
+https://codecov.io/gh/wasm3/pywasm3

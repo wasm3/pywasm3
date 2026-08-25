@@ -25,4 +25,4 @@ All notable changes to this project are documented here.
   free-threaded builds.
 - A `memset()` cleared a pointer's worth of a 32-slot argument array.
 
-[Unreleased]: https://github.com/o-murphy/pywasm3/commits/main
+[Unreleased]: https://github.com/wasm3/pywasm3/commits/main

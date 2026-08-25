@@ -32,8 +32,8 @@ dynamic = ["version"]  # setuptools-scm, from git tags
 
 [project.urls]
 "Homepage" = "https://github.com/wasm3/pywasm3"
-"Source" = "https://github.com/o-murphy/pywasm3"
-"Bug Reports" = "https://github.com/o-murphy/pywasm3/issues"
+"Source" = "https://github.com/wasm3/pywasm3"
+"Bug Reports" = "https://github.com/wasm3/pywasm3/issues"
 "Wasm3 project" = "https://github.com/wasm3/wasm3"
 
 [tool.setuptools]
