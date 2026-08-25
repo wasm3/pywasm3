@@ -17,6 +17,11 @@ All notable changes to this project are documented here.
 - Compiler flags are selected per compiler; MSVC builds previously received none.
 - CI builds wheels for Linux (x86_64/i686/aarch64/armv7l), Windows (x64/x86/ARM64),
   macOS (arm64/x86_64) and Android via cibuildwheel.
+- Every script in `examples/` declares its dependencies inline (PEP 723), so
+  `uv run examples/<name>.py` runs it without any manual setup.
+- The audio examples depend on `pygame-ce` instead of `pygame`: it ships wheels with
+  `pygame.mixer` for current CPython versions, while a source build of `pygame` silently
+  drops the mixer when SDL2_mixer is missing.
 
 ### Fixed
 
@@ -24,5 +29,12 @@ All notable changes to this project are documented here.
 - Argument/result scratch buffers were `static`, making calls non-reentrant and racy on
   free-threaded builds.
 - A `memset()` cleared a pointer's worth of a 32-slot argument array.
+- The audio examples hung instead of exiting when their player subprocess could not
+  start (no mixer support or no audio device): nothing drained the queue, so the feeder
+  thread blocked at exit and even Ctrl+C could not end the process. They now report why
+  audio is unavailable and stop, and Ctrl+C no longer waits for buffered audio.
+- `examples/pygame-audio2.py` played silence: `music.wasm` allocates its sample buffer
+  during the first render call, so the `samplebuffer` pointer was read while it was
+  still 0 and every chunk came from address 0. It is now read after rendering.
 
 [Unreleased]: https://github.com/wasm3/pywasm3/commits/main

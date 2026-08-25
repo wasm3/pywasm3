@@ -1,7 +1,19 @@
 #!/usr/bin/env python3
+# /// script
+# requires-python = ">=3.11"
+# dependencies = [
+#     "numpy>=2.4.6",
+#     "pygame-ce>=2.5.5",
+#     "pywasm3",
+# ]
+#
+# [tool.uv.sources]
+# pywasm3 = { path = "../" }
+# ///
 
 import multiprocessing as mp
 import os
+import queue
 import time
 
 import numpy
@@ -18,15 +30,23 @@ buffersize = 128 * 4
 prebuffer = 256
 
 
+class PlayerGone(Exception):
+    """The player subprocess died, so there is no point in rendering more audio."""
+
+
 def draw(c):
     print(c, end="", flush=True)
 
 
 def player(q):
-    from pygame import mixer
+    try:
+        from pygame import mixer
 
-    mixer.pre_init(frequency=sample_rate, size=-16, channels=2)
-    mixer.init()
+        mixer.pre_init(frequency=sample_rate, size=-16, channels=2)
+        mixer.init()
+    except Exception as e:  # no mixer support in this pygame build, or no audio device
+        print(f"\nCannot play audio: {e}", flush=True)
+        return
 
     channel = mixer.Channel(0)
     try:
@@ -48,9 +68,19 @@ if __name__ == "__main__":
     print("Source:      https://petersalomonsen.com/webassemblymusic/livecodev2/?gitrepo=wasmsummit2")
     print()
 
-    q = mp.Queue()
+    q = mp.Queue(maxsize=8)
     p = mp.Process(target=player, args=(q,))
     p.start()
+
+    def send(data):
+        """Hand a chunk over to the player, giving up if it is gone."""
+        while p.is_alive():
+            try:
+                q.put(data, timeout=0.1)
+                return
+            except queue.Full:
+                pass
+        raise PlayerGone
 
     scriptpath = os.path.dirname(os.path.realpath(__file__))
     wasm_fn = os.path.join(scriptpath, "./wasm/wasmsummit2.wasm")
@@ -86,6 +116,7 @@ if __name__ == "__main__":
 
         return (data.clip(-1, 1) * 32767).astype(numpy.int16).tobytes()
 
+    stop_now = False
     try:
         buff = b""
         progress = 0
@@ -95,7 +126,7 @@ if __name__ == "__main__":
             if not progress % 5:
                 draw(f"\rPre-buffering... {progress}%")
 
-        q.put(buff)
+        send(buff)
         draw("\n")
 
         buff = b""
@@ -108,15 +139,28 @@ if __name__ == "__main__":
 
             if len(buff) >= 64 * 1024:
                 # draw("+")
-                q.put(buff)
+                send(buff)
                 buff = b""
                 time.sleep(0.01)
 
-        q.put(buff)  # play the leftover
+        send(buff)  # play the leftover
         draw("!")
     except (KeyboardInterrupt, SystemExit):
         print("\nInterrupted by user")
+        stop_now = True
+    except PlayerGone:
+        print("\nPlayer process is gone, stopping")
+        stop_now = True
     finally:
-        q.put(None)
+        if stop_now:
+            # Stop right away instead of playing out what is buffered, and drop the
+            # queued chunks: otherwise the feeder thread would block forever at exit.
+            p.terminate()
+            q.cancel_join_thread()
+        else:
+            try:
+                send(None)  # let the player stop once it has drained the queue
+            except PlayerGone:
+                q.cancel_join_thread()
         q.close()
         p.join()

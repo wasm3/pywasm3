@@ -1,7 +1,19 @@
 #!/usr/bin/env python3
+# /// script
+# requires-python = ">=3.11"
+# dependencies = [
+#     "numpy>=2.4.6",
+#     "pygame-ce>=2.5.5",
+#     "pywasm3",
+# ]
+#
+# [tool.uv.sources]
+# pywasm3 = { path = "../" }
+# ///
 
 import multiprocessing as mp
 import os
+import queue
 import struct
 import time
 
@@ -16,15 +28,23 @@ sample_rate = 22050  # or 44100
 prebuffer = 1024
 
 
+class PlayerGone(Exception):
+    """The player subprocess died, so there is no point in rendering more audio."""
+
+
 def draw(c):
     print(c, end="", flush=True)
 
 
 def player(q):
-    from pygame import mixer
+    try:
+        from pygame import mixer
 
-    mixer.pre_init(frequency=sample_rate, size=-16, channels=2)
-    mixer.init()
+        mixer.pre_init(frequency=sample_rate, size=-16, channels=2)
+        mixer.init()
+    except Exception as e:  # no mixer support in this pygame build, or no audio device
+        print(f"\nCannot play audio: {e}", flush=True)
+        return
 
     channel = mixer.Channel(0)
     try:
@@ -47,9 +67,19 @@ if __name__ == "__main__":
     print("Synthesized: https://soundcloud.com/psalomo/hondarribia")
     print()
 
-    q = mp.Queue()
+    q = mp.Queue(maxsize=8)
     p = mp.Process(target=player, args=(q,))
     p.start()
+
+    def send(data):
+        """Hand a chunk over to the player, giving up if it is gone."""
+        while p.is_alive():
+            try:
+                q.put(data, timeout=0.1)
+                return
+            except queue.Full:
+                pass
+        raise PlayerGone
 
     scriptpath = os.path.dirname(os.path.realpath(__file__))
     wasm_fn = os.path.join(scriptpath, f"./wasm/hondarribia-{sample_rate}.wasm")
@@ -91,7 +121,7 @@ if __name__ == "__main__":
 
         if len(buff) >= buff_sz * 1024:
             # draw("+")
-            q.put(buff)
+            send(buff)
             buff = b""
             time.sleep(0.01)
 
@@ -101,13 +131,27 @@ if __name__ == "__main__":
         mod.link_function(modname, "fd_write", "i(i*i*)", fd_write)
 
     wasm_start = rt.find_function("_start")
+    stop_now = False
     try:
         wasm_start()
-        q.put(buff)  # play the leftover
+        send(buff)  # play the leftover
         draw("!")
     except (KeyboardInterrupt, SystemExit):
         print("\nInterrupted by user")
+        stop_now = True
+    except PlayerGone:
+        print("\nPlayer process is gone, stopping")
+        stop_now = True
     finally:
-        q.put(None)
+        if stop_now:
+            # Stop right away instead of playing out what is buffered, and drop the
+            # queued chunks: otherwise the feeder thread would block forever at exit.
+            p.terminate()
+            q.cancel_join_thread()
+        else:
+            try:
+                send(None)  # let the player stop once it has drained the queue
+            except PlayerGone:
+                q.cancel_join_thread()
         q.close()
         p.join()

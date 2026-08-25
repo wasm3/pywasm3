@@ -50,6 +50,29 @@ result = wasm_fib(24)
 print(result)                       # 46368
 ```
 
+## Examples
+
+Every script in [`examples/`](examples) carries its dependencies inline (PEP 723), so
+`uv run` sets up an environment for it on the fly — nothing to install first:
+
+```sh
+uv run examples/00-fibonacci.py     # wasm3 vs. pure Python fib(24)
+uv run examples/01-coremark.py      # CoreMark benchmark
+uv run examples/02-metered.py       # gas metering
+uv run examples/03-asyncified.py    # asyncified module driven by asyncio
+uv run examples/pygame-doomfire.py  # one of the pygame demos
+```
+
+The scripts resolve `pywasm3` from this checkout, so they build the extension you have
+locally. Add `--no-sources` to run them against the released package instead:
+
+```sh
+uv run --no-sources examples/00-fibonacci.py
+```
+
+The `pygame-*` scripts open a window; `pygame-audio*.py` also need a working audio
+device, and print why they cannot play instead of failing when there is none.
+
 ## Building from source
 
 Wasm3 is the `external/wasm3` submodule, so a plain clone has nothing to compile:
