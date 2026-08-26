@@ -55,7 +55,7 @@ repos:
         files: '\.(py|pyi|c|h)$|^(pyproject\.toml|setup\.py|uv\.lock)$'
 
   - repo: https://github.com/codespell-project/codespell
-    rev: v2.4.1
+    rev: v2.4.3
     hooks:
       - id: codespell
         # The wasm3 submodule is upstream's code, not ours to spellcheck.
