@@ -1,7 +1,7 @@
-import wasm3 as m3
 import pytest
-
 from helpers import wat2wasm
+
+import wasm3 as m3
 
 FIB64_WASM = wat2wasm("""
 (module
@@ -58,20 +58,23 @@ def test_classes():
     assert isinstance(m3.Module, type)
     assert isinstance(m3.Function, type)
 
+
 def test_callback():
     env = m3.Environment()
     rt = env.new_runtime(1024)
     mod = env.parse_module(CALLBACK_WASM)
     rt.load(mod)
-    mem = rt.get_memory(0)
+    rt.get_memory(0)
 
     def func(x, y):
         assert x == 123
         assert y == 456
-        return x*y
+        return x * y
+
     mod.link_function("env", "callback", "i(ii)", func)
     run_callback = rt.find_function("run_callback")
-    assert run_callback(123, 456) == 123*456
+    assert run_callback(123, 456) == 123 * 456
+
 
 def test_callback_member():
     class WasmRunner:
@@ -87,10 +90,11 @@ def test_callback_member():
         def func(self, x, y):
             assert x == 987
             assert y == 654
-            return x+y
+            return x + y
 
     inst = WasmRunner(CALLBACK_WASM)
-    assert inst.run_callback(987, 654) == 987+654
+    assert inst.run_callback(987, 654) == 987 + 654
+
 
 def test_link_global():
     env = m3.Environment()
@@ -103,31 +107,32 @@ def test_link_global():
     samplerate = rt.find_function("samplerate")
     assert samplerate() == pytest.approx(22050.0)
 
+
 def test_m3(capfd):
     env = m3.Environment()
     rt = env.new_runtime(1024)
     assert isinstance(rt, m3.Runtime)
     mod = env.parse_module(FIB64_WASM)
     assert isinstance(mod, m3.Module)
-    assert mod.name == '.unnamed'
+    assert mod.name == ".unnamed"
     rt.load(mod)
     assert rt.get_memory(0) is None  # XXX
-#     rt.print_info()
-#     assert capfd.readouterr().out == """
-# -- m3 runtime -------------------------------------------------
-#  stack-size: 1024
-#
-#  module [0]  name: '.unnamed'; funcs: 1
-# ----------------------------------------------------------------
-# """
+    #     rt.print_info()
+    #     assert capfd.readouterr().out == """
+    # -- m3 runtime -------------------------------------------------
+    #  stack-size: 1024
+    #
+    #  module [0]  name: '.unnamed'; funcs: 1
+    # ----------------------------------------------------------------
+    # """
     with pytest.raises(RuntimeError):
-        rt.find_function('not_existing')
+        rt.find_function("not_existing")
 
-    func = rt.find_function('fib')
+    func = rt.find_function("fib")
     assert isinstance(func, m3.Function)
-    assert func.call_argv('5') == 5
-    assert func.call_argv('10') == 55
-    assert func.name == 'fib'
+    assert func.call_argv("5") == 5
+    assert func.call_argv("10") == 55
+    assert func.name == "fib"
     assert func.num_args == 1
     assert func.num_rets == 1
     assert func.arg_types == (2,)
@@ -135,7 +140,7 @@ def test_m3(capfd):
     assert func(0) == 0
     assert func(1) == 1
     rt.load(env.parse_module(ADD_WASM))
-    add = rt.find_function('add')
+    add = rt.find_function("add")
     assert add(2, 3) == 5
 
 
@@ -147,8 +152,9 @@ def call_function(wasm, func, *args):
     f = rt.find_function(func)
     return f.call_argv(*args)
 
+
 def test_fib64():
-    assert call_function(FIB64_WASM, 'fib', '5') == 5
-    assert call_function(FIB64_WASM, 'fib', '10') == 55
+    assert call_function(FIB64_WASM, "fib", "5") == 5
+    assert call_function(FIB64_WASM, "fib", "10") == 55
     # TODO: Fails on 3.6, 3.7 ?
-    #assert call_function(FIB64_WASM, 'fib', '90') == 2880067194370816120
+    # assert call_function(FIB64_WASM, 'fib', '90') == 2880067194370816120

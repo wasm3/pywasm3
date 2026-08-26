@@ -1,8 +1,18 @@
 #include "Python.h"
 
+#include <stdio.h>
+#include <string.h>
+
 #include "wasm3.h"
 
 #define MAX_ARGS 32
+
+// PyUnicode_AsUTF8() is stable ABI only since 3.13; this one since 3.10.
+static const char *
+as_utf8(PyObject *str)
+{
+    return PyUnicode_AsUTF8AndSize(str, NULL);
+}
 
 typedef struct {
     PyObject_HEAD
@@ -145,12 +155,12 @@ M3_Environment_new_runtime(m3_environment *env, PyObject *stack_size_bytes)
 
     m3_runtime *self = PyObject_New(m3_runtime, (PyTypeObject*)M3_Runtime_Type);
     if (!self) return NULL;
-    Py_INCREF(env);
+    Py_INCREF((PyObject *)env);
     self->env = env;
     self->r = m3_NewRuntime(env->e, n, NULL);
     self->wasm_bytes = PyList_New(0);
     if (!self->r || !self->wasm_bytes) {
-        Py_DECREF(self);
+        Py_DECREF((PyObject *)self);
         PyErr_NoMemory();
         return NULL;
     }
@@ -164,7 +174,7 @@ delRuntime(m3_runtime *self)
     self->r = NULL;
     Py_XDECREF(self->wasm_bytes);
     self->wasm_bytes = NULL;
-    Py_XDECREF(self->env);
+    Py_XDECREF((PyObject *)self->env);
     self->env = NULL;
 }
 
@@ -189,7 +199,7 @@ M3_Environment_parse_module(m3_environment *env, PyObject *bytes)
         return NULL;
     }
     Py_INCREF(bytes);
-    Py_INCREF(env);
+    Py_INCREF((PyObject *)env);
     self->env = env;
     self->runtime = NULL;
     self->m = m;
@@ -228,7 +238,7 @@ M3_Runtime_load(m3_runtime *runtime, PyObject *arg)
     if (PyList_Append(runtime->wasm_bytes, module->bytes) < 0) {
         return NULL;
     }
-    byte_ref_index = PyList_GET_SIZE(runtime->wasm_bytes) - 1;
+    byte_ref_index = PyList_Size(runtime->wasm_bytes) - 1;
 
     M3Result err = m3_LoadModule(runtime->r, module->m);
     if (err) {
@@ -236,7 +246,7 @@ M3_Runtime_load(m3_runtime *runtime, PyObject *arg)
         return formatError(PyExc_RuntimeError, runtime->r, err);
     }
 
-    Py_INCREF(runtime);
+    Py_INCREF((PyObject *)runtime);
     module->runtime = runtime;
 
     err = m3_LinkRawFunctionEx (module->m, "metering", "usegas", "v(i)", &metering_usegas, module);
@@ -254,13 +264,13 @@ static PyObject *
 M3_Runtime_find_function(m3_runtime *runtime, PyObject *name)
 {
     IM3Function func = NULL;
-    M3Result err = m3_FindFunction(&func, runtime->r, PyUnicode_AsUTF8(name));
+    M3Result err = m3_FindFunction(&func, runtime->r, as_utf8(name));
     if (err) {
         return formatError(PyExc_RuntimeError, runtime->r, err);
     }
     m3_function *self = PyObject_New(m3_function, (PyTypeObject*)M3_Function_Type);
     if (!self) return NULL;
-	Py_INCREF(runtime);
+	Py_INCREF((PyObject *)runtime);
     self->f = func;
     self->r = runtime->r;
     self->runtime = runtime;
@@ -270,15 +280,22 @@ M3_Runtime_find_function(m3_runtime *runtime, PyObject *name)
 static PyObject *
 M3_Runtime_get_memory(m3_runtime *runtime, PyObject *index)
 {
-    Py_buffer* pybuff;
+    Py_buffer pybuff;
     uint32_t size = 0;
-    uint8_t *mem = m3_GetMemory(runtime->r, &size, PyLong_AsLong(index));
+    long i = PyLong_AsLong(index);
+    if (i == -1 && PyErr_Occurred()) {
+        return NULL;
+    }
+    uint8_t *mem = m3_GetMemory(runtime->r, &size, i);
     if (!mem)
         Py_RETURN_NONE;
 
-    pybuff = (Py_buffer*) PyMem_Malloc(sizeof(Py_buffer));
-    PyBuffer_FillInfo(pybuff, (PyObject *)runtime, mem, size, 0, PyBUF_WRITABLE);
-    return PyMemoryView_FromBuffer(pybuff);
+    // PyMemoryView_FromBuffer() copies the Py_buffer, so a stack one is enough
+    // (this used to be PyMem_Malloc'd, and leaked).
+    if (PyBuffer_FillInfo(&pybuff, (PyObject *)runtime, mem, size, 0, PyBUF_WRITABLE) < 0) {
+        return NULL;
+    }
+    return PyMemoryView_FromBuffer(&pybuff);
 }
 
 static PyMethodDef M3_Runtime_methods[] = {
@@ -340,9 +357,9 @@ delModule(m3_module *self)
 
     Py_XDECREF(self->bytes);
     self->bytes = NULL;
-    Py_XDECREF(self->env);
+    Py_XDECREF((PyObject *)self->env);
     self->env = NULL;
-    Py_XDECREF(runtime);
+    Py_XDECREF((PyObject *)runtime);
 }
 
 static const char* trapException = "function raised exception";
@@ -360,18 +377,18 @@ m3ApiRawFunction(CallImport)
 
     for (Py_ssize_t i = 0; i < nArgs; ++i) {
         PyObject *arg = get_arg_from_stack(&_sp[i+nRets], m3_GetArgType(f, i));
-        PyTuple_SET_ITEM(pArgs, i, arg);
+        PyTuple_SetItem(pArgs, i, arg);
     }
 
     PyObject * pRets = PyObject_CallObject(pFunc, pArgs);
     if (!pRets) m3ApiTrap(trapException);
 
     if (PyTuple_Check(pRets)) {
-        if (PyTuple_GET_SIZE(pRets) != nRets) {
+        if (PyTuple_Size(pRets) != nRets) {
             m3ApiTrap("python call: return tuple length mismatch");
         }
         for (Py_ssize_t i = 0; i < nRets; ++i) {
-            PyObject *ret = PyTuple_GET_ITEM(pRets, i);
+            PyObject *ret = PyTuple_GetItem(pRets, i);
             if (!ret) m3ApiTrap("python call: return type invalid");
             put_arg_on_stack(&_sp[i], m3_GetRetType(f, i), ret);
         }
@@ -397,15 +414,15 @@ M3_Module_link_function(m3_module *self, PyObject *args)
 {
     PyObject *mod_name, *func_name, *func_sig, *pFunc;
     if (PyTuple_Size(args) == 4) {
-        mod_name  = PyTuple_GET_ITEM(args, 0);
-        func_name = PyTuple_GET_ITEM(args, 1);
-        func_sig  = PyTuple_GET_ITEM(args, 2);
-        pFunc     = PyTuple_GET_ITEM(args, 3);
+        mod_name  = PyTuple_GetItem(args, 0);
+        func_name = PyTuple_GetItem(args, 1);
+        func_sig  = PyTuple_GetItem(args, 2);
+        pFunc     = PyTuple_GetItem(args, 3);
     } else if (PyTuple_Size(args) == 3) {
-        mod_name  = PyTuple_GET_ITEM(args, 0);
-        func_name = PyTuple_GET_ITEM(args, 1);
+        mod_name  = PyTuple_GetItem(args, 0);
+        func_name = PyTuple_GetItem(args, 1);
         func_sig  = NULL;
-        pFunc     = PyTuple_GET_ITEM(args, 2);
+        pFunc     = PyTuple_GetItem(args, 2);
     } else {
         PyErr_SetString(PyExc_TypeError, "link_function takes 3 or 4 arguments");
         return NULL;
@@ -415,8 +432,8 @@ M3_Module_link_function(m3_module *self, PyObject *args)
         PyErr_SetString(PyExc_TypeError, "function should be a callable object");
         return NULL;
     }
-    M3Result err = m3_LinkRawFunctionEx (self->m, PyUnicode_AsUTF8(mod_name), PyUnicode_AsUTF8(func_name),
-                                         (func_sig?PyUnicode_AsUTF8(func_sig):NULL), CallImport, pFunc);
+    M3Result err = m3_LinkRawFunctionEx (self->m, as_utf8(mod_name), as_utf8(func_name),
+                                         (func_sig?as_utf8(func_sig):NULL), CallImport, pFunc);
     if (err && err != m3Err_functionLookupFailed) {
         return formatError(PyExc_RuntimeError, m3_GetModuleRuntime(self->m), err);
     }
@@ -433,12 +450,12 @@ M3_Module_link_global(m3_module *self, PyObject *args)
         return NULL;
     }
 
-    PyObject *mod_name = PyTuple_GET_ITEM(args, 0);
-    PyObject *global_name = PyTuple_GET_ITEM(args, 1);
-    PyObject *value = PyTuple_GET_ITEM(args, 2);
+    PyObject *mod_name = PyTuple_GetItem(args, 0);
+    PyObject *global_name = PyTuple_GetItem(args, 1);
+    PyObject *value = PyTuple_GetItem(args, 2);
 
-    const char *mod_name_utf8 = PyUnicode_AsUTF8(mod_name);
-    const char *global_name_utf8 = PyUnicode_AsUTF8(global_name);
+    const char *mod_name_utf8 = as_utf8(mod_name);
+    const char *global_name_utf8 = as_utf8(global_name);
     if (!mod_name_utf8 || !global_name_utf8) {
         return NULL;
     }
@@ -466,7 +483,7 @@ static PyObject *
 M3_Module_get_global(m3_module *self, PyObject *name)
 {
     M3TaggedValue tagged;
-    IM3Global g = m3_FindGlobal(self->m, PyUnicode_AsUTF8(name));
+    IM3Global g = m3_FindGlobal(self->m, as_utf8(name));
     M3Result err = m3_GetGlobal (g, &tagged);
     if (err) {
         return formatError(PyExc_RuntimeError, m3_GetModuleRuntime(self->m), err);
@@ -488,10 +505,10 @@ M3_Module_set_global(m3_module *self, PyObject *args)
         return NULL;
     }
 
-    PyObject *name  = PyTuple_GET_ITEM(args, 0);
-    PyObject *value = PyTuple_GET_ITEM(args, 1);
+    PyObject *name  = PyTuple_GetItem(args, 0);
+    PyObject *value = PyTuple_GetItem(args, 1);
 
-    IM3Global g = m3_FindGlobal(self->m, PyUnicode_AsUTF8(name));
+    IM3Global g = m3_FindGlobal(self->m, as_utf8(name));
 
     M3TaggedValue tagged;
     if (set_tagged_value(&tagged, m3_GetGlobalType(g), value) < 0) {
@@ -552,8 +569,8 @@ get_result_from_stack(m3_function *func)
         return NULL;
     }
 
-    static uint64_t    valbuff[MAX_ARGS];
-    static const void* valptrs[MAX_ARGS];
+    uint64_t    valbuff[MAX_ARGS];
+    const void* valptrs[MAX_ARGS];
     memset(valbuff, 0, sizeof(valbuff));
     memset(valptrs, 0, sizeof(valptrs));
 
@@ -573,7 +590,7 @@ get_result_from_stack(m3_function *func)
             Py_ssize_t i;
             for (i = 0; i < nRets; ++i) {
                 PyObject *val = get_arg_from_stack(valptrs[i], m3_GetRetType(func->f, i));
-                PyTuple_SET_ITEM(ret, i, val);
+                PyTuple_SetItem(ret, i, val);
             }
         }
         return ret;
@@ -611,15 +628,15 @@ void print_backtrace(IM3Runtime runtime)
 static PyObject *
 M3_Function_call_argv(m3_function *func, PyObject *args)
 {
-    Py_ssize_t size = PyTuple_GET_SIZE(args);
+    Py_ssize_t size = PyTuple_Size(args);
     const char* argv[MAX_ARGS];
     for(Py_ssize_t i = 0; i< size;++i) {
-        PyObject *arg = PyTuple_GET_ITEM(args, i);
+        PyObject *arg = PyTuple_GetItem(args, i);
         if (!PyUnicode_Check(arg)) {
             PyErr_SetString(PyExc_RuntimeError, "all arguments should be strings");
             return NULL;
         }
-        argv[i] = PyUnicode_AsUTF8(arg);
+        argv[i] = as_utf8(arg);
     }
     M3Result err = m3_CallArgv(func->f, size, argv);
     if (err == trapException) {
@@ -644,15 +661,15 @@ M3_Function_call(m3_function *self, PyObject *args, PyObject *kwargs)
         return NULL;
     }
 
-    static uint64_t    valbuff[MAX_ARGS];
-    static const void* valptrs[MAX_ARGS];
-    memset(valbuff, 0, sizeof(args));
+    uint64_t    valbuff[MAX_ARGS];
+    const void* valptrs[MAX_ARGS];
+    memset(valbuff, 0, sizeof(valbuff));   // was sizeof(args): a pointer's size
     memset(valptrs, 0, sizeof(valptrs));
 
     for (int i = 0; i < nArgs; i++) {
         uint64_t* s = &valbuff[i];
         valptrs[i] = s;
-        put_arg_on_stack(s, m3_GetArgType(f, i), PyTuple_GET_ITEM(args, i));
+        put_arg_on_stack(s, m3_GetArgType(f, i), PyTuple_GetItem(args, i));
     }
 
     M3Result err = m3_Call (f, nArgs, valptrs);
@@ -692,7 +709,7 @@ Function_arg_types(m3_function *self, void * closure)
     if (ret) {
         Py_ssize_t i;
         for (i = 0; i < nArgs; ++i) {
-            PyTuple_SET_ITEM(ret, i, PyLong_FromLong(m3_GetArgType(self->f, i)));
+            PyTuple_SetItem(ret, i, PyLong_FromLong(m3_GetArgType(self->f, i)));
         }
     }
     return ret;
@@ -706,7 +723,7 @@ Function_ret_types(m3_function *self, void * closure)
     if (ret) {
         Py_ssize_t i;
         for (i = 0; i < nRets; ++i) {
-            PyTuple_SET_ITEM(ret, i, PyLong_FromLong(m3_GetRetType(self->f, i)));
+            PyTuple_SetItem(ret, i, PyLong_FromLong(m3_GetRetType(self->f, i)));
         }
     }
     return ret;
@@ -717,7 +734,7 @@ delFunction(m3_function *self)
 {
     self->f = NULL;
     self->r = NULL;
-    Py_XDECREF(self->runtime);
+    Py_XDECREF((PyObject *)self->runtime);
     self->runtime = NULL;
 }
 
@@ -793,14 +810,20 @@ m3_modexec(PyObject *m)
     M3_Function_Type = PyType_FromSpec(&M3_Function_Type_spec);
     if (M3_Function_Type == NULL)
         goto fail;
-    PyModule_AddStringMacro(m, M3_VERSION);
-    PyModule_AddObject(m, "Environment", M3_Environment_Type);
-    PyModule_AddObject(m, "Runtime", M3_Runtime_Type);
-    PyModule_AddObject(m, "Module", M3_Module_Type);
-    PyModule_AddObject(m, "Function", M3_Function_Type);
+    if (PyModule_AddStringMacro(m, M3_VERSION) < 0)
+        goto fail;
+    // AddObjectRef, not AddObject: keeps the static M3_*_Type pointers owners.
+    if (PyModule_AddObjectRef(m, "Environment", M3_Environment_Type) < 0)
+        goto fail;
+    if (PyModule_AddObjectRef(m, "Runtime", M3_Runtime_Type) < 0)
+        goto fail;
+    if (PyModule_AddObjectRef(m, "Module", M3_Module_Type) < 0)
+        goto fail;
+    if (PyModule_AddObjectRef(m, "Function", M3_Function_Type) < 0)
+        goto fail;
     return 0;
  fail:
-    Py_XDECREF(m);
+    // m is borrowed (Py_mod_exec lends it), so no decref here.
     return -1;
 }
 
@@ -814,7 +837,7 @@ PyDoc_STRVAR(m3_doc,
 
 static struct PyModuleDef m3module = {
     PyModuleDef_HEAD_INIT,
-    "wasm3",
+    "wasm3._wasm3",
     m3_doc,
     0,
     0, // methods
@@ -825,7 +848,7 @@ static struct PyModuleDef m3module = {
 };
 
 PyMODINIT_FUNC
-PyInit_wasm3(void)
+PyInit__wasm3(void)
 {
     return PyModuleDef_Init(&m3module);
 }

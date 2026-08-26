@@ -1,4 +1,15 @@
 #!/usr/bin/env python3
+# /// script
+# requires-python = ">=3.11"
+# dependencies = [
+#     "numpy>=2.4.6",
+#     "pygame>=2.6.1",
+#     "pywasm3",
+# ]
+#
+# [tool.uv.sources]
+# pywasm3 = { path = "../" }
+# ///
 
 import io
 import os
@@ -28,9 +39,7 @@ if rom_fn:
 else:
     print('Downloading "Back to Color" demo by Antonio Niño Díaz...')
     try:
-        rom_f = urllib.request.urlopen(
-            "https://github.com/AntonioND/back-to-color/raw/master/demo.gbc"
-        )
+        rom_f = urllib.request.urlopen("https://github.com/AntonioND/back-to-color/raw/master/demo.gbc")
         rom_size = int(rom_f.headers["content-length"])
     except Exception:
         print("Download failed. Please specify GameBoy ROM file to run.")
@@ -113,9 +122,7 @@ def virtual_fb_write(data):
 def virtual_input_read(size):
     inputs = b""
     for event in pygame.event.get():
-        if event.type == pygame.QUIT or (
-            event.type == pygame.KEYDOWN and event.key == pygame.K_ESCAPE
-        ):
+        if event.type == pygame.QUIT or (event.type == pygame.KEYDOWN and event.key == pygame.K_ESCAPE):
             pygame.quit()
             sys.exit()
         elif event.type == pygame.KEYDOWN or event.type == pygame.KEYUP:
@@ -291,7 +298,7 @@ def clock_time_get(clk_id, precision, result):
 
 @wasi_generic_api
 def poll_oneoff(ev_in, ev_out, subs, evts):
-    #mem = rt.get_memory(0)
+    # mem = rt.get_memory(0)
     clock.tick(60)
     return WasiErrno.SUCCESS
 

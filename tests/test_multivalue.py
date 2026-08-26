@@ -1,7 +1,6 @@
-import wasm3 as m3
-import pytest
-
 from helpers import wat2wasm
+
+import wasm3 as m3
 
 MV_SWAP_WASM = wat2wasm("""
 (module
@@ -24,23 +23,25 @@ MV_IMPORT_WASM = wat2wasm("""
 )
 """)
 
+
 def test_multivalue_swap():
     env = m3.Environment()
     rt = env.new_runtime(1024)
     mod = env.parse_module(MV_SWAP_WASM)
     rt.load(mod)
-    swap = rt.find_function('swap')
+    swap = rt.find_function("swap")
     assert swap(1, 2) == (2, 1)
     assert swap(2, 1) == (1, 2)
-    assert swap.call_argv('1', '2') == (2, 1)
-    assert swap.call_argv('2', '1') == (1, 2)
+    assert swap.call_argv("1", "2") == (2, 1)
+    assert swap.call_argv("2", "1") == (1, 2)
+
 
 def test_multivalue_imported():
     env = m3.Environment()
     rt = env.new_runtime(1024)
     mod = env.parse_module(MV_IMPORT_WASM)
     rt.load(mod)
-    mod.link_function("env", "swap", "Ii(iI)", lambda a,b: (b,a))
-    swap = rt.find_function('swap')
+    mod.link_function("env", "swap", "Ii(iI)", lambda a, b: (b, a))
+    swap = rt.find_function("swap")
     assert swap(1, 2) == (2, 1)
     assert swap(2, 1) == (1, 2)

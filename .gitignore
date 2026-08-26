@@ -1,6 +1,21 @@
+# Build artifacts
 dist/
 build/
-__pycache__/
-pywasm3.egg-info/
-.pytest*
+wheelhouse/
+*.egg-info/
 *.so
+*.pyd
+*.gcno
+*.gcda
+*.gcov
+coverage.xml
+htmlcov/
+.coverage
+.coverage.*
+
+# Environments / caches
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/

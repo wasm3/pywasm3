@@ -1,0 +1,78 @@
+name: Coverage
+
+on:
+  push:
+    branches:
+      - "main"
+    paths: &code-paths
+      - "pyproject.toml"
+      - "setup.py"
+      - "src/**"
+      - "tests/**"
+      - ".github/workflows/coverage.yml"
+  pull_request:
+    branches:
+      - "*"
+    paths: *code-paths
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0 # required for setuptools-scm
+          submodules: recursive
+
+      - name: Install uv and set the python version
+        uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
+        with:
+          python-version: "3.11"
+          github-token: ${{ github.token }}
+
+      # Without wat2wasm the WAT-based modules skip and the numbers mean nothing.
+      - name: Install wabt and gcovr
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y wabt
+          uv tool install gcovr
+
+      - name: Install the project
+        run: uv sync
+        shell: bash
+
+      # The code worth measuring is C (__init__.py is a shim), so this is gcov, not
+      # coverage.py. In-place because a normal install compiles in a temp dir that is
+      # deleted, taking the .gcno notes the runtime .gcda files are written next to.
+      # --with: setuptools/setuptools-scm are build-time only, not in the dev group.
+      - name: Build the extension in-place, gcov-instrumented
+        run: uv run --with setuptools --with setuptools-scm python setup.py build_ext --inplace --force
+        shell: bash
+        env:
+          PYWASM3_COVERAGE: "1"
+
+      # --no-sync: keeps the instrumented in-place build pytest imports.
+      - name: Run tests
+        run: uv run --no-sync pytest
+        shell: bash
+
+      # --filter: report on the binding only, not on wasm3's own sources.
+      - name: Build coverage report
+        run: |
+          gcovr --root . --filter 'src/wasm3/' --xml coverage.xml --html-details coverage.html --print-summary
+        shell: bash
+
+      - name: Upload coverage to Codecov
+        uses: codecov/codecov-action@v7
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}
+          files: ./coverage.xml
+          fail_ci_if_error: true

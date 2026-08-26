@@ -1,4 +1,14 @@
 #!/usr/bin/env python3
+# /// script
+# requires-python = ">=3.11"
+# dependencies = [
+#     "pygame>=2.6.1",
+#     "pywasm3",
+# ]
+#
+# [tool.uv.sources]
+# pywasm3 = { path = "../" }
+# ///
 
 import math
 import os
@@ -64,9 +74,7 @@ prev_input_time = 0
 while True:
     # Process input
     for event in pygame.event.get():
-        if event.type == pygame.QUIT or (
-            event.type == pygame.KEYDOWN and event.key == pygame.K_ESCAPE
-        ):
+        if event.type == pygame.QUIT or (event.type == pygame.KEYDOWN and event.key == pygame.K_ESCAPE):
             pygame.quit()
             sys.exit()
         elif event.type == pygame.KEYDOWN or event.type == pygame.KEYUP:

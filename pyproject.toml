@@ -1,0 +1,97 @@
+[build-system]
+requires = ["setuptools>=77", "setuptools-scm>=8"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "pywasm3"
+description = "The fastest WebAssembly interpreter"
+readme = "README.md"
+requires-python = ">=3.11"
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [{ name = "Volodymyr Shymanskyy", email = "vshymanskyi@gmail.com" }]
+keywords = ["wasm", "wasm3", "webassembly", "interpreter", "runtime", "wasi"]
+classifiers = [
+    "Topic :: Software Development :: Libraries :: Python Modules",
+    "Topic :: Software Development :: Interpreters",
+    "Development Status :: 5 - Production/Stable",
+    "Intended Audience :: Developers",
+    "Programming Language :: C",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+    "Programming Language :: Python :: Implementation :: CPython",
+    "Operating System :: POSIX :: Linux",
+    "Operating System :: Microsoft :: Windows",
+    "Operating System :: MacOS :: MacOS X",
+]
+dynamic = ["version"]  # setuptools-scm, from git tags
+
+[project.urls]
+"Homepage" = "https://github.com/wasm3/pywasm3"
+"Source" = "https://github.com/wasm3/pywasm3"
+"Bug Reports" = "https://github.com/wasm3/pywasm3/issues"
+"Wasm3 project" = "https://github.com/wasm3/wasm3"
+
+[tool.setuptools]
+# Defaults to true with pyproject config, which would ship _wasm3.c in the wheel.
+include-package-data = false
+
+[tool.setuptools.packages.find]
+where = ["src"]
+include = ["wasm3*"]
+
+[tool.setuptools.package-data]
+wasm3 = ["py.typed", "*.pyi"]
+
+[tool.setuptools_scm]
+root = "."
+# Used when there's no git metadata at all; the repo still needs a v0.9.0 tag before its
+# first release from here.
+fallback_version = "0.9.0"
+
+[tool.cibuildwheel]
+build-frontend = "build[uv]"
+# cp311-* self-tags cp311-abi3 (setup.py) and covers every 3.11+ interpreter; cp314t-*
+# is separate because Py_LIMITED_API and Py_GIL_DISABLED are incompatible.
+build = "cp311-* cp314t-*"
+test-requires = "pytest"
+# Tests run from a scratch dir, so {project} points pytest at the repo's tests/.
+# Without wabt there, this is effectively the smoke test (see tests/helpers.py).
+test-command = "pytest {project}/tests"
+
+[tool.cibuildwheel.android]
+test-sources = ["tests", "pyproject.toml"]
+test-command = "python -m pytest tests"
+build = "cp313-android_* cp314-android_*"
+
+[tool.pytest.ini_options]
+minversion = "8.0"
+addopts = "-rf"
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 120
+include = ["pyproject.toml", "setup.py", "src/**/*.py", "src/**/*.pyi", "tests/**/*.py"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B"]
+
+[tool.pyright]
+include = ["src", "tests", "setup.py"]
+pythonVersion = "3.11"
+# _wasm3.pyi describes the extension, so no build is needed to type-check.
+reportMissingModuleSource = false
+
+[dependency-groups]
+# setuptools/setuptools-scm are build-time only (declared in [build-system] requires);
+# cibuildwheel is invoked via `uvx cibuildwheel` in CI. Neither belongs in a dev venv.
+dev = [
+    "pre-commit>=4.6.2",
+    "pyright>=1.1.406",
+    "pytest>=8.0",
+    "ruff>=0.16.0",
+]

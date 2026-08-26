@@ -1,3 +1,12 @@
-graft wasm3
 include README.md
 include LICENSE
+
+# wasm3 is a submodule: an sdist needs the sources setup.py compiles, plus its licence.
+# The rest (platform ports, upstream's tests, docs) is several MB nothing here reads.
+prune external/wasm3
+graft external/wasm3/source
+include external/wasm3/LICENSE
+prune external/wasm3/source/extra
+
+global-exclude *.py[cod]
+global-exclude __pycache__
