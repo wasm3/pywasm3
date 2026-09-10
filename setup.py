@@ -42,7 +42,8 @@ if COVERAGE:
     EXTRA_COMPILE_ARGS = ["-O0", "-g", "--coverage"]
     EXTRA_LINK_ARGS = ["--coverage"]
 elif IS_MSVC:
-    EXTRA_COMPILE_ARGS = ["/O2"]
+    # Turn off the legacy, non-standard MSVC preprocessor
+    EXTRA_COMPILE_ARGS = ["/O2", "/Zc:preprocessor"]
     EXTRA_LINK_ARGS = []
 else:
     EXTRA_COMPILE_ARGS = ["-g0", "-O3", "-fomit-frame-pointer", "-fno-stack-check", "-fno-stack-protector"]
