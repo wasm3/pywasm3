@@ -14,14 +14,8 @@ import time
 
 import wasm3
 
-"""
-  NOTE: Gas metering/limit only applies to pre-instrumented modules.
-  You can generate a metered version from any wasm file automatically, using
-    https://github.com/ewasm/wasm-metering
-"""
-
 scriptpath = os.path.dirname(os.path.realpath(__file__))
-wasm_fn = os.path.join(scriptpath, "./wasm/coremark-metered.wasm")
+wasm_fn = os.path.join(scriptpath, "./wasm/coremark-minimal.wasm")
 
 print("Initializing Wasm3 engine...")
 
@@ -38,8 +32,8 @@ with open(wasm_fn, "rb") as f:
     rt.load(mod)
     mod.link_function("env", "clock_ms", "I()", clock_ms)
 
-# Gas metering will only apply to metered (pre-instrumented) modules
-mod.gasLimit = 500_000_000
+# Wasm3 instruments code as it compiles it, so the limit goes in before find_function()
+rt.gas_limit = 500_000_000
 
 wasm_run = rt.find_function("run")
 
@@ -51,6 +45,9 @@ try:
         print(f"Result: {res:.3f}")
     else:
         print("Error")
+except RuntimeError as e:
+    # Running out of gas traps: CoreMark needs ~333M, so try a lower limit to see it
+    print(f"Stopped: {e}")
 finally:
-    if mod.gasUsed:
-        print(f"Gas used: {mod.gasUsed}")
+    if rt.gas_used:
+        print(f"Gas used: {rt.gas_used}")

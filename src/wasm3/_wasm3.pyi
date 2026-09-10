@@ -3,6 +3,8 @@
 from collections.abc import Callable
 from typing import Any, overload
 
+from typing_extensions import Buffer  # collections.abc.Buffer is 3.12+; stubs are never imported
+
 M3_VERSION: str
 
 WasmValue = int | float
@@ -13,13 +15,19 @@ class Environment:
     def parse_module(self, data: bytes, /) -> Module: ...
 
 class Runtime:
+    # Native gas metering. Bodies are instrumented as they compile, so set gas_limit before
+    # find_function(); setting it re-arms the full budget, 0 disables. Running out raises
+    # RuntimeError("[trap] out of gas").
+    gas_limit: float
+    @property
+    def gas_used(self) -> float: ...
     def load(self, module: Module, /) -> None: ...
     def find_function(self, name: str, /) -> Function: ...
-    def get_memory(self, index: int, /) -> memoryview | None: ...
 
 class Module:
     @property
     def name(self) -> str: ...
+    # Legacy: only counts modules pre-instrumented with ewasm's metering.usegas import.
     gasLimit: float
     @property
     def gasUsed(self) -> float: ...
@@ -30,6 +38,27 @@ class Module:
     def link_global(self, module: str, name: str, value: WasmValue, /) -> None: ...
     def get_global(self, name: str, /) -> WasmValue: ...
     def set_global(self, name: str, value: WasmValue, /) -> None: ...
+    # By index, or by export name ("memory"). Raises RuntimeError when there is no such
+    # memory, or before the module is loaded.
+    def get_memory(self, key: int | str = 0, /) -> Memory: ...
+
+class Memory:
+    """A module's linear memory, looked up afresh on every access - safe to keep across memory.grow.
+
+    Slices are copies; write back with slice assignment. memoryview(mem) is zero-copy, but
+    dangles once the memory grows.
+    """
+
+    def __len__(self) -> int: ...
+    @overload
+    def __getitem__(self, key: int, /) -> int: ...
+    @overload
+    def __getitem__(self, key: slice, /) -> bytes: ...
+    @overload
+    def __setitem__(self, key: int, value: int, /) -> None: ...
+    @overload
+    def __setitem__(self, key: slice, value: Buffer, /) -> None: ...
+    def __buffer__(self, flags: int, /) -> memoryview: ...
 
 class Function:
     @property

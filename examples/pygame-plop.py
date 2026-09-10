@@ -64,7 +64,7 @@ with open(state_fn, "rb") as compressed:
 plop_len = len(plop_data)
 ptr = wasm_malloc(plop_len)
 
-mem = rt.get_memory(0)
+mem = mod.get_memory(0)
 mem[ptr : ptr + plop_len] = plop_data
 
 res = wasm_importData(ptr)
@@ -89,10 +89,10 @@ surface = pygame.display.set_mode(scr_size)
 pygame.display.set_caption("Wasm3 plop")
 white = (255, 255, 255)
 
-mem = rt.get_memory(0)
+# A live view of the image: valid while the memory does not grow
 img_ptr = mod.get_global("imageData")
 (img_base,) = struct.unpack("<I", mem[img_ptr : img_ptr + 4])
-region = mem[img_base : img_base + (img_w * img_h * 4)]
+region = memoryview(mem)[img_base : img_base + (img_w * img_h * 4)]
 img = pygame.image.frombuffer(region, img_size, "RGBA")
 
 clock = pygame.time.Clock()

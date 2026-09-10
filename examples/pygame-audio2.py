@@ -22,8 +22,8 @@ import wasm3
 
 os.environ["PYGAME_HIDE_SUPPORT_PROMPT"] = "true"
 
-# Set to 44100 for better quality, or 11025 for faster computation
-sample_rate = 22050
+# Set to 22050 or 11025 on slower machines
+sample_rate = 44100
 
 buffersize = 128 * 4
 
@@ -65,13 +65,13 @@ def player(q):
 
 if __name__ == "__main__":
     print("WebAssembly Music by Peter Salomonsen - from the executable music competition at Revision demoparty 2021")
-    print("Source:      https://petersalomonsen.com/webassemblymusic/livecodev2/?gist=d71387112368a2692dc1d84c0ab5b1d2")
+    print("Source:      https://webassemblymusic.pages.dev/?gist=d71387112368a2692dc1d84c0ab5b1d2")
     print(
         "Synthesized: https://soundcloud.com/psalomo/webassembly-music-entry-for-the-revision-2021-executable-music-competition"
     )
     print()
 
-    q = mp.Queue(maxsize=8)
+    q = mp.Queue(maxsize=64)
     p = mp.Process(target=player, args=(q,))
     p.start()
 
@@ -86,7 +86,7 @@ if __name__ == "__main__":
         raise PlayerGone
 
     scriptpath = os.path.dirname(os.path.realpath(__file__))
-    wasm_fn = os.path.join(scriptpath, "./wasm/music.wasm")
+    wasm_fn = os.path.join(scriptpath, "./wasm/synth/music.wasm")
 
     # Prepare Wasm3 engine
 
@@ -98,6 +98,7 @@ if __name__ == "__main__":
         rt.load(mod)
 
     wasm_play = rt.find_function("playEventsAndFillSampleBuffer")
+    mem = mod.get_memory(0)
 
     duration = 164000
 
@@ -110,7 +111,6 @@ if __name__ == "__main__":
         samplebufferR = samplebufferL + buffersize
 
         # get data
-        mem = rt.get_memory(0)
         data_l = mem[samplebufferL : samplebufferL + buffersize]
         data_r = mem[samplebufferR : samplebufferR + buffersize]
 

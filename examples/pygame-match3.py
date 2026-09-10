@@ -35,19 +35,19 @@ with open(wasm_fn, "rb") as f:
     mod.link_function("Math", "random", lambda: random.random())
 
 wasm_run = rt.find_function("run")
-mem = rt.get_memory(0)
+mem = mod.get_memory(0)
 
-# Map memory region to an RGBA image
+# Map memory region to an RGBA image (a live view: valid while the memory does not grow)
 
 img_base = 0x1100
 img_size = (150, 150)
 (img_w, img_h) = img_size
-region = mem[img_base : img_base + (img_w * img_h * 4)]
+region = memoryview(mem)[img_base : img_base + (img_w * img_h * 4)]
 img = pygame.image.frombuffer(region, img_size, "RGBA")
 
 # Prepare PyGame
 
-scr_size = (img_w * 4, img_h * 4)
+scr_size = (img_w * 2, img_h * 2)
 pygame.init()
 surface = pygame.display.set_mode(scr_size)
 pygame.display.set_caption("Wasm3 Match3")
@@ -66,8 +66,8 @@ while True:
             sys.exit()
 
     (mouse_x, mouse_y) = pygame.mouse.get_pos()
-    mem[0] = mouse_x // 4
-    mem[1] = mouse_y // 4
+    mem[0] = mouse_x // 2
+    mem[1] = mouse_y // 2
     mem[2] = 1 if pygame.mouse.get_pressed()[0] else 0
 
     # Stop rendering if no interaction for 10 seconds

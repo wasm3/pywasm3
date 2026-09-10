@@ -35,14 +35,14 @@ with open(wasm_fn, "rb") as f:
     wasm_blobs(5)
 
 wasm_run = rt.find_function("run")
-mem = rt.get_memory(0)
+mem = mod.get_memory(0)
 
-# Map memory region to an RGBA image
+# Map memory region to an RGBA image (a live view: valid while the memory does not grow)
 
 img_base = 1024
 img_size = (320, 200)
 (img_w, img_h) = img_size
-region = mem[img_base : img_base + (img_w * img_h * 4)]
+region = memoryview(mem)[img_base : img_base + (img_w * img_h * 4)]
 img = pygame.image.frombuffer(region, img_size, "RGBA")
 
 # Prepare PyGame

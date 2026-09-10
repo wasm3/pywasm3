@@ -72,7 +72,7 @@ env = wasm3.Environment()
 rt = env.new_runtime(1024)
 mod = env.parse_module(WASM)
 rt.load(mod)
-mem = rt.get_memory(0)
+mem = mod.get_memory(0)
 
 
 # ------------------------------------------------

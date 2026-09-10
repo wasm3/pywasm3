@@ -4,6 +4,7 @@
 #include <string.h>
 
 #include "wasm3.h"
+#include "m3_env.h"     // for M3Module.numMemories, which the public API has no getter for
 
 #define MAX_ARGS 32
 
@@ -44,10 +45,17 @@ typedef struct {
     m3_runtime *runtime;
 } m3_function;
 
+typedef struct {
+    PyObject_HEAD
+    m3_module *module;
+    uint32_t index;
+} m3_memory;
+
 static PyObject *M3_Environment_Type;
 static PyObject *M3_Runtime_Type;
 static PyObject *M3_Module_Type;
 static PyObject *M3_Function_Type;
+static PyObject *M3_Memory_Type;
 
 
 m3ApiRawFunction(metering_usegas)
@@ -277,34 +285,47 @@ M3_Runtime_find_function(m3_runtime *runtime, PyObject *name)
     return (PyObject *)self;
 }
 
-static PyObject *
-M3_Runtime_get_memory(m3_runtime *runtime, PyObject *index)
+// Native gas metering: wasm3 instruments bodies as it compiles them, so the limit
+// must be set before anything runs (find_function compiles, and runs the start function).
+static int
+Runtime_setGasLimit(m3_runtime *self, PyObject *value, void * closure)
 {
-    Py_buffer pybuff;
-    uint32_t size = 0;
-    long i = PyLong_AsLong(index);
-    if (i == -1 && PyErr_Occurred()) {
-        return NULL;
+    if (!value) {
+        PyErr_SetString(PyExc_AttributeError, "cannot delete gas_limit");
+        return -1;
     }
-    uint8_t *mem = m3_GetMemory(runtime->r, &size, i);
-    if (!mem)
-        Py_RETURN_NONE;
-
-    // PyMemoryView_FromBuffer() copies the Py_buffer, so a stack one is enough
-    // (this used to be PyMem_Malloc'd, and leaked).
-    if (PyBuffer_FillInfo(&pybuff, (PyObject *)runtime, mem, size, 0, PyBUF_WRITABLE) < 0) {
-        return NULL;
+    double gas = PyFloat_AsDouble(value);
+    if (gas == -1.0 && PyErr_Occurred()) {
+        return -1;
     }
-    return PyMemoryView_FromBuffer(&pybuff);
+    m3_SetGasLimit(self->r, gas);
+    return 0;
 }
+
+static PyObject *
+Runtime_getGasLimit(m3_runtime *self, void * closure)
+{
+    return PyFloat_FromDouble(m3_GetGasLimit(self->r));
+}
+
+static PyObject *
+Runtime_getGasUsed(m3_runtime *self, void * closure)
+{
+    return PyFloat_FromDouble(m3_GetGasUsed(self->r));
+}
+
+static PyGetSetDef M3_Runtime_properties[] = {
+    {"gas_limit",   (getter) Runtime_getGasLimit, (setter) Runtime_setGasLimit,
+        "gas budget; setting it re-arms the runtime with a full budget, 0 disables metering", NULL},
+    {"gas_used",    (getter) Runtime_getGasUsed, NULL, "gas used since gas_limit was last set", NULL},
+    {NULL}  /* Sentinel */
+};
 
 static PyMethodDef M3_Runtime_methods[] = {
     {"load",            (PyCFunction)M3_Runtime_load,  METH_O,
         PyDoc_STR("load(module) -> None")},
     {"find_function", (PyCFunction)M3_Runtime_find_function,  METH_O,
         PyDoc_STR("find_function(name) -> Function")},
-    {"get_memory",     (PyCFunction)M3_Runtime_get_memory,  METH_O,
-        PyDoc_STR("get_memory(index) -> memoryview")},
     {NULL,              NULL}           /* sentinel */
 };
 
@@ -313,6 +334,7 @@ static PyType_Slot M3_Runtime_Type_slots[] = {
     {Py_tp_finalize, delRuntime},
     // {Py_tp_new, newRuntime},
     {Py_tp_methods, M3_Runtime_methods},
+    {Py_tp_getset, M3_Runtime_properties},
     {0, 0}
 };
 
@@ -524,6 +546,135 @@ M3_Module_set_global(m3_module *self, PyObject *args)
     Py_RETURN_NONE;
 }
 
+static PyObject *
+M3_Module_get_memory(m3_module *self, PyObject *args)
+{
+    PyObject *key = NULL;
+    if (!PyArg_ParseTuple(args, "|O:get_memory", &key)) {
+        return NULL;
+    }
+    // Memories are allocated when the module is instantiated
+    if (!self->runtime) {
+        PyErr_SetString(PyExc_RuntimeError, "module is not loaded");
+        return NULL;
+    }
+
+    uint32_t index = 0;
+    if (key && PyUnicode_Check(key)) {
+        const char *name = as_utf8(key);
+        if (!name) {
+            return NULL;
+        }
+        if (m3_FindExportedMemory(self->m, name, &index)) {
+            return PyErr_Format(PyExc_RuntimeError, "%s: no memory exported as '%s'", m3Err_unknownMemory, name);
+        }
+    } else {
+        long long i = 0;
+        if (key) {
+            i = PyLong_AsLongLong(key);
+            if (i == -1 && PyErr_Occurred()) {
+                return NULL;
+            }
+        }
+        if (i < 0 || i >= self->m->numMemories) {
+            return PyErr_Format(PyExc_RuntimeError, "%s: module has no memory %lld", m3Err_unknownMemory, i);
+        }
+        index = (uint32_t)i;
+    }
+
+    m3_memory *mem = PyObject_New(m3_memory, (PyTypeObject*)M3_Memory_Type);
+    if (!mem) return NULL;
+    Py_INCREF((PyObject *)self);
+    mem->module = self;
+    mem->index = index;
+    return (PyObject *)mem;
+}
+
+// A Memory holds the module and index, never the pointer: memory.grow reallocates
+// linear memory, so every access looks it up afresh.
+static uint8_t *
+memory_data(m3_memory *self, Py_ssize_t *o_size)
+{
+    size_t size = 0;
+    uint8_t *data = m3_GetMemory(self->module->m, &size, self->index);
+    *o_size = (size > PY_SSIZE_T_MAX) ? PY_SSIZE_T_MAX : (Py_ssize_t)size;
+    return data;
+}
+
+static int
+Memory_getbuffer(m3_memory *self, Py_buffer *view, int flags)
+{
+    static uint8_t empty;
+    Py_ssize_t size;
+    uint8_t *data = memory_data(self, &size);
+    return PyBuffer_FillInfo(view, (PyObject *)self, data ? data : &empty, size, 0, flags);
+}
+
+static Py_ssize_t
+Memory_length(m3_memory *self)
+{
+    Py_ssize_t size;
+    memory_data(self, &size);
+    return size;
+}
+
+// Indexing goes through a memoryview of the memory as it is right now, which gives
+// ints, slices, steps and bounds checks their usual meaning.
+static PyObject *
+Memory_subscript(m3_memory *self, PyObject *key)
+{
+    PyObject *view = PyMemoryView_FromObject((PyObject *)self);
+    if (!view) return NULL;
+    PyObject *item = PyObject_GetItem(view, key);
+    // A slice would still point into the memory: hand out a copy instead
+    if (item && !PyLong_Check(item)) {
+        PyObject *copy = PyBytes_FromObject(item);
+        Py_DECREF(item);
+        item = copy;
+    }
+    Py_DECREF(view);
+    return item;
+}
+
+static int
+Memory_ass_subscript(m3_memory *self, PyObject *key, PyObject *value)
+{
+    if (!value) {
+        PyErr_SetString(PyExc_TypeError, "cannot delete memory");
+        return -1;
+    }
+    PyObject *view = PyMemoryView_FromObject((PyObject *)self);
+    if (!view) return -1;
+    int res = PyObject_SetItem(view, key, value);
+    Py_DECREF(view);
+    return res;
+}
+
+static PyObject *
+Memory_repr(m3_memory *self)
+{
+    return PyUnicode_FromFormat("<wasm3.Memory %u of '%s', %zd bytes>", (unsigned)self->index,
+                                m3_GetModuleName(self->module->m), Memory_length(self));
+}
+
+static void
+delMemory(m3_memory *self)
+{
+    Py_XDECREF((PyObject *)self->module);
+    self->module = NULL;
+}
+
+static PyType_Slot M3_Memory_Type_slots[] = {
+    {Py_tp_doc, "The wasm3.Memory type: a module's linear memory"},
+    {Py_tp_finalize, delMemory},
+    {Py_tp_repr, Memory_repr},
+    {Py_mp_length, Memory_length},
+    {Py_mp_subscript, Memory_subscript},
+    {Py_mp_ass_subscript, Memory_ass_subscript},
+    {Py_bf_getbuffer, Memory_getbuffer},
+    {0, 0}
+};
+
 static PyGetSetDef M3_Module_properties[] = {
     {"name",        (getter) Module_name, NULL, "module name", NULL},
     {"gasLimit",    (getter) Module_getGasLimit, (setter) Module_setGasLimit, "gas limit for metered modules", NULL},
@@ -543,6 +694,9 @@ static PyMethodDef M3_Module_methods[] = {
 
     {"set_global", (PyCFunction)M3_Module_set_global,  METH_VARARGS,
         PyDoc_STR("set_global(name, value)")},
+
+    {"get_memory", (PyCFunction)M3_Module_get_memory,  METH_VARARGS,
+        PyDoc_STR("get_memory(index_or_export_name=0) -> Memory")},
 
     {NULL,              NULL}           /* sentinel */
 };
@@ -795,6 +949,15 @@ static PyType_Spec M3_Function_Type_spec = {
     M3_Function_Type_slots
 };
 
+static PyType_Spec M3_Memory_Type_spec = {
+    "wasm3.Memory",
+    sizeof(m3_memory),
+    0,
+    // Only Module.get_memory() makes one: a bare Memory would have no module
+    Py_TPFLAGS_DEFAULT | Py_TPFLAGS_DISALLOW_INSTANTIATION,
+    M3_Memory_Type_slots
+};
+
 static int
 m3_modexec(PyObject *m)
 {
@@ -810,6 +973,9 @@ m3_modexec(PyObject *m)
     M3_Function_Type = PyType_FromSpec(&M3_Function_Type_spec);
     if (M3_Function_Type == NULL)
         goto fail;
+    M3_Memory_Type = PyType_FromSpec(&M3_Memory_Type_spec);
+    if (M3_Memory_Type == NULL)
+        goto fail;
     if (PyModule_AddStringMacro(m, M3_VERSION) < 0)
         goto fail;
     // AddObjectRef, not AddObject: keeps the static M3_*_Type pointers owners.
@@ -820,6 +986,8 @@ m3_modexec(PyObject *m)
     if (PyModule_AddObjectRef(m, "Module", M3_Module_Type) < 0)
         goto fail;
     if (PyModule_AddObjectRef(m, "Function", M3_Function_Type) < 0)
+        goto fail;
+    if (PyModule_AddObjectRef(m, "Memory", M3_Memory_Type) < 0)
         goto fail;
     return 0;
  fail:

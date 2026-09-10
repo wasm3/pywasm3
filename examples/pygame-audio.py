@@ -23,8 +23,6 @@ import wasm3
 
 os.environ["PYGAME_HIDE_SUPPORT_PROMPT"] = "true"
 
-sample_rate = 22050  # or 44100
-
 prebuffer = 1024
 
 
@@ -40,7 +38,7 @@ def player(q):
     try:
         from pygame import mixer
 
-        mixer.pre_init(frequency=sample_rate, size=-16, channels=2)
+        mixer.pre_init(frequency=44100, size=-16, channels=2)
         mixer.init()
     except Exception as e:  # no mixer support in this pygame build, or no audio device
         print(f"\nCannot play audio: {e}", flush=True)
@@ -63,11 +61,11 @@ def player(q):
 
 if __name__ == "__main__":
     print("Hondarribia by Peter Salomonsen - intro song for WebAssembly Summit 2020")
-    print("Source:      https://petersalomonsen.com/webassemblymusic/livecodev2/?gist=5b795090ead4f192e7f5ee5dcdd17392")
+    print("Source:      https://webassemblymusic.pages.dev/?gist=5b795090ead4f192e7f5ee5dcdd17392")
     print("Synthesized: https://soundcloud.com/psalomo/hondarribia")
     print()
 
-    q = mp.Queue(maxsize=8)
+    q = mp.Queue(maxsize=64)
     p = mp.Process(target=player, args=(q,))
     p.start()
 
@@ -82,7 +80,7 @@ if __name__ == "__main__":
         raise PlayerGone
 
     scriptpath = os.path.dirname(os.path.realpath(__file__))
-    wasm_fn = os.path.join(scriptpath, f"./wasm/hondarribia-{sample_rate}.wasm")
+    wasm_fn = os.path.join(scriptpath, f"./wasm/synth/hondarribia.wasm")
 
     # Prepare Wasm3 engine
 
@@ -91,13 +89,13 @@ if __name__ == "__main__":
     with open(wasm_fn, "rb") as f:
         mod = env.parse_module(f.read())
         rt.load(mod)
+    mem = mod.get_memory(0)
 
     buff = b""
     buff_sz = prebuffer
 
     def fd_write(fd, iovs, iovs_len, nwritten):
         global buff, buff_sz
-        mem = rt.get_memory(0)
 
         # get data
         (off, size) = struct.unpack("<II", mem[iovs : iovs + 8])

@@ -65,10 +65,10 @@ def player(q):
 
 if __name__ == "__main__":
     print("WebAssembly Summit 2021 theme - by Peter Salomonsen")
-    print("Source:      https://petersalomonsen.com/webassemblymusic/livecodev2/?gitrepo=wasmsummit2")
+    print("Source:      https://webassemblymusic.pages.dev/?gitrepo=wasmsummit2")
     print()
 
-    q = mp.Queue(maxsize=8)
+    q = mp.Queue(maxsize=64)
     p = mp.Process(target=player, args=(q,))
     p.start()
 
@@ -83,7 +83,7 @@ if __name__ == "__main__":
         raise PlayerGone
 
     scriptpath = os.path.dirname(os.path.realpath(__file__))
-    wasm_fn = os.path.join(scriptpath, "./wasm/wasmsummit2.wasm")
+    wasm_fn = os.path.join(scriptpath, "./wasm/synth/wasmsummit2.wasm")
 
     # Prepare Wasm3 engine
 
@@ -95,6 +95,7 @@ if __name__ == "__main__":
         rt.load(mod)
 
     wasm_play = rt.find_function("playEventsAndFillSampleBuffer")
+    mem = mod.get_memory(0)
 
     duration = rt.find_function("getDuration")()
 
@@ -105,7 +106,6 @@ if __name__ == "__main__":
         wasm_play()
 
         # get data
-        mem = rt.get_memory(0)
         data_l = mem[samplebufferL : samplebufferL + buffersize]
         data_r = mem[samplebufferR : samplebufferR + buffersize]
 

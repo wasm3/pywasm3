@@ -61,6 +61,7 @@ rt = env.new_runtime(16 * 1024)
 with open(wasm_fn, "rb") as f:
     mod = env.parse_module(f.read())
     rt.load(mod)
+mem = mod.get_memory(0)
 
 # Prepare PyGame
 
@@ -182,7 +183,6 @@ def wasi_generic_api(func):
 
 @wasi_generic_api
 def args_sizes_get(argc, buf_sz):
-    mem = rt.get_memory(0)
     struct.pack_into("<I", mem, argc, 2)
     struct.pack_into("<I", mem, buf_sz, 32)
     return WasiErrno.SUCCESS
@@ -190,7 +190,6 @@ def args_sizes_get(argc, buf_sz):
 
 @wasi_generic_api
 def args_get(argv, buf):
-    mem = rt.get_memory(0)
     struct.pack_into("<II", mem, argv, buf, buf + 8)
     struct.pack_into("8s4s", mem, buf, b"wasmboy\0", b"rom\0")
     return WasiErrno.SUCCESS
@@ -198,8 +197,7 @@ def args_get(argv, buf):
 
 @wasi_generic_api
 def path_filestat_get(fd, flags, path, path_len, buff):
-    mem = rt.get_memory(0)
-    path = mem[path : path + path_len].tobytes().decode()
+    path = mem[path : path + path_len].decode()
     # print("path_filestat_get:", path)
     f = vfs[path]
     struct.pack_into("<QQBxxxIQQQQ", mem, buff, 1, 1, f["type"], 1, f["size"], 0, 0, 0)
@@ -219,8 +217,7 @@ def path_open(
     fs_flags,
     fd,
 ):
-    mem = rt.get_memory(0)
-    path = mem[path : path + path_len].tobytes().decode()
+    path = mem[path : path + path_len].decode()
 
     fd_val = vfs[path]["fd"]
     struct.pack_into("<I", mem, fd, fd_val)
@@ -231,7 +228,6 @@ def path_open(
 
 @wasi_generic_api
 def fd_seek(fd, offset, whence, result):
-    mem = rt.get_memory(0)
     # print("fd_seek:", f"{fd} {FilePos(whence)}:{offset}")
     struct.pack_into("<Q", mem, result, 0)
     return WasiErrno.SUCCESS
@@ -239,8 +235,6 @@ def fd_seek(fd, offset, whence, result):
 
 @wasi_generic_api
 def fd_read(fd, iovs, iovs_len, nread):
-    mem = rt.get_memory(0)
-
     data_sz = 0
     for i in range(iovs_len):
         iov = iovs + 8 * i
@@ -269,14 +263,12 @@ def fd_read(fd, iovs, iovs_len, nread):
 
 @wasi_generic_api
 def fd_write(fd, iovs, iovs_len, nwritten):
-    mem = rt.get_memory(0)
-
     # get data
     data = b""
     for i in range(iovs_len):
         iov = iovs + 8 * i
         (off, size) = struct.unpack("<II", mem[iov : iov + 8])
-        data += mem[off : off + size].tobytes()
+        data += mem[off : off + size]
 
     if fd == 1 or fd == 2:  # stdout, stderr
         print(data.decode(), end="")
@@ -291,14 +283,12 @@ def fd_write(fd, iovs, iovs_len, nwritten):
 
 @wasi_generic_api
 def clock_time_get(clk_id, precision, result):
-    mem = rt.get_memory(0)
     struct.pack_into("<Q", mem, result, 0)
     return WasiErrno.SUCCESS
 
 
 @wasi_generic_api
 def poll_oneoff(ev_in, ev_out, subs, evts):
-    # mem = rt.get_memory(0)
     clock.tick(60)
     return WasiErrno.SUCCESS
 

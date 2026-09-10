@@ -7,6 +7,7 @@ from wasm3._wasm3 import (
     M3_VERSION,
     Environment,
     Function,
+    Memory,
     Module,
     Runtime,
 )
@@ -15,6 +16,7 @@ __all__ = [
     "M3_VERSION",
     "Environment",
     "Function",
+    "Memory",
     "Module",
     "Runtime",
 ]

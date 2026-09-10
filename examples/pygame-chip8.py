@@ -35,7 +35,7 @@ with open(wasm_fn, "rb") as f:
     mod.link_function("Math", "random", random.random)
 
 wasm_run = rt.find_function("run")
-mem = rt.get_memory(0)
+mem = mod.get_memory(0)
 
 # Load CHIP-8 ROM
 
@@ -51,12 +51,12 @@ ROM = base64.b64decode("""
 
 mem[0x200 : 0x200 + len(ROM)] = ROM
 
-# Map memory region to an RGBA image
+# Map memory region to an RGBA image (a live view: valid while the memory does not grow)
 
 img_base = 0x1000
 img_size = (64, 32)
 (img_w, img_h) = img_size
-region = mem[img_base : img_base + (img_w * img_h * 4)]
+region = memoryview(mem)[img_base : img_base + (img_w * img_h * 4)]
 img = pygame.image.frombuffer(region, img_size, "RGBA")
 
 # Prepare PyGame
