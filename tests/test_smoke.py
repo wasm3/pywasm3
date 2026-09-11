@@ -85,7 +85,7 @@ def test_out_of_gas_traps_and_rearms():
 def test_gas_limit_rejects_non_numbers():
     rt, _ = _fib_runtime()
     with pytest.raises(TypeError):
-        rt.gas_limit = "lots"
+        rt.gas_limit = "lots"  # pyright: ignore[reportAttributeAccessIssue]
     with pytest.raises(AttributeError):
         del rt.gas_limit
 
