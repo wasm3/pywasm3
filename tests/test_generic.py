@@ -64,7 +64,6 @@ def test_callback():
     rt = env.new_runtime(1024)
     mod = env.parse_module(CALLBACK_WASM)
     rt.load(mod)
-    mod.get_memory(0)
 
     def func(x, y):
         assert x == 123
@@ -83,7 +82,6 @@ def test_callback_member():
             self.rt = self.env.new_runtime(1024)
             self.mod = self.env.parse_module(wasm)
             self.rt.load(self.mod)
-            self.mem = self.mod.get_memory(0)
             self.mod.link_function("env", "callback", "i(ii)", self.func)
             self.run_callback = self.rt.find_function("run_callback")
 
