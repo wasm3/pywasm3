@@ -45,11 +45,12 @@ repos:
         files: '\.(py|pyi)$'
 
       # Rebuilds the extension when the C source changes (uv sync above only reinstalls on
-      # metadata changes), then runs the suite against it.
+      # metadata changes), then runs the suite against it. Scoped to pywasm3: a bare
+      # --reinstall also replaces pre-commit itself, which Windows refuses while it runs.
       - id: uv-pytest
         name: uv run pytest
         entry: uv
-        args: ["run", "--reinstall", "pytest"]
+        args: ["run", "--reinstall-package", "pywasm3", "pytest"]
         language: system
         pass_filenames: false
         files: '\.(py|pyi|c|h)$|^(pyproject\.toml|setup\.py|uv\.lock)$'

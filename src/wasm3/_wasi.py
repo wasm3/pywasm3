@@ -103,7 +103,7 @@ class Wasi:
         self.files: dict[str, bytearray] = {name: bytearray(data) for name, data in (files or {}).items()}
         self.stdout = bytearray()
         self.stderr = bytearray()
-        self._mem: "Memory | None" = None
+        self._mem: Memory | None = None
         self._fds = {
             STDIN_FD: _Handle(bytearray(stdin), FILETYPE_CHARACTER_DEVICE),
             STDOUT_FD: _Handle(self.stdout, FILETYPE_CHARACTER_DEVICE),
