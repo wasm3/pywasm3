@@ -1,6 +1,11 @@
 include README.md
 include LICENSE
 
+# The wabt builds wasm3.wabt runs, and the note recording where they came from.
+include src/wasm3/tools/*.wasm
+include src/wasm3/tools/README.md
+include src/wasm3/tools/LICENSE.wabt
+
 # wasm3 is a submodule: an sdist needs the sources setup.py compiles, plus its licence.
 # The rest (platform ports, upstream's tests, docs) is several MB nothing here reads.
 prune external/wasm3

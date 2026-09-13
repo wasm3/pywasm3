@@ -34,21 +34,39 @@ uv run --with pywasm3 python my_script.py                      # without a proje
 ## Usage example
 
 ```py
-import wasm3, base64
+import wasm3
 
-# WebAssembly binary
-WASM = base64.b64decode("AGFzbQEAAAABBgFgAX4"
-    "BfgMCAQAHBwEDZmliAAAKHwEdACAAQgJUBEAgAA"
-    "8LIABCAn0QACAAQgF9EAB8Dws=")
+WAT = """
+(module
+  (func $fib (export "fib") (param $n i64) (result i64)
+    (if (i64.lt_u (local.get $n) (i64.const 2))
+      (then (return (local.get $n))))
+    (return (i64.add (call $fib (i64.sub (local.get $n) (i64.const 2)))
+                     (call $fib (i64.sub (local.get $n) (i64.const 1))))))
+)
+"""
 
 env = wasm3.Environment()
 rt  = env.new_runtime(2048)
-mod = env.parse_module(WASM)
+mod = env.parse_module(WAT)          # or a binary module, as bytes
 rt.load(mod)
 wasm_fib = rt.find_function("fib")
 result = wasm_fib(24)
 print(result)                       # 46368
 ```
+
+## Text format
+
+pywasm3 bundles `wat2wasm` and `wasm2wat` tools from [wabt](https://github.com/WebAssembly/wabt):
+
+```py
+wasm = wasm3.wat2wasm('(module (func (export "f") (result i32) i32.const 42))')
+print(wasm3.wasm2wat(wasm))         # back to text
+```
+
+The optional wasm features wabt leaves off are enabled by default
+(`wasm3.wabt.FEATURE_ARGS`); pass extra flags with `args=[...]`, or use
+`wasm3.wabt.run()` to drive a bundled tool exactly as a command line would.
 
 ## Examples
 
@@ -70,8 +88,6 @@ locally. Add `--no-sources` to run them against the released package instead:
 uv run --no-sources examples/00-fibonacci.py
 ```
 
-The `pygame-*` scripts open a window; `pygame-audio*.py` also need a working audio
-device, and print why they cannot play instead of failing when there is none.
 
 ## Building from source
 
@@ -102,10 +118,6 @@ The same tools run as `pre-commit` hooks, which is what CI checks:
 uv tool install pre-commit
 pre-commit run --all-files
 ```
-
-Most tests assemble their modules from inline WAT and need
-[wabt](https://github.com/WebAssembly/wabt)'s `wat2wasm` (`apt install wabt`,
-`brew install wabt`); without it they skip and only `tests/test_smoke.py` runs.
 
 Release wheels are built by `.github/workflows/publish.yml` with
 [cibuildwheel](https://cibuildwheel.pypa.io/) for Linux (x86_64/i686/aarch64/armv7l),

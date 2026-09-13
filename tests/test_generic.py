@@ -26,6 +26,7 @@ CALLBACK_WASM = wat2wasm("""
 (module
   (type (;0;) (func (param i32 i32) (result i32)))
   (func $i (import "env" "callback") (type 0))
+  (memory (export "memory") 1)
   (func (export "run_callback") (type 0)
     local.get 0
     local.get 1

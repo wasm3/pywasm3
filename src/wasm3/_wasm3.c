@@ -24,7 +24,9 @@ typedef struct {
     PyObject_HEAD
     m3_environment *env;
     IM3Runtime r;
-    PyObject *wasm_bytes;
+    // Whatever a loaded module needs to outlive its Module object: the bytes wasm3
+    // parsed it from, and the callables linked into its imports.
+    PyObject *keepalive;
 } m3_runtime;
 
 typedef struct {
@@ -33,6 +35,7 @@ typedef struct {
     m3_runtime *runtime;
     IM3Module m;
     PyObject *bytes;
+    PyObject *linked;       // the callables link_function() handed to wasm3
     //bool is_gas_metered;
     int64_t total_gas;
     int64_t current_gas;
@@ -73,13 +76,20 @@ m3ApiRawFunction(metering_usegas)
 }
 
 
-static m3_environment*
-newEnvironment(PyObject *arg)
+// Allocates through the type handed in, not M3_Environment_Type, so that a Python
+// subclass (wasm3.Environment, which adds WAT support) gets an instance of itself,
+// with room for its __dict__ - PyObject_New() would size and tag it as the base type.
+static PyObject *
+newEnvironment(PyTypeObject *type, PyObject *args, PyObject *kwds)
 {
-    m3_environment *self = PyObject_New(m3_environment, (PyTypeObject*)M3_Environment_Type);
+    m3_environment *self = (m3_environment *)PyType_GenericAlloc(type, 0);
     if (!self) return NULL;
     self->e = m3_NewEnvironment();
-    return self;    
+    if (!self->e) {
+        Py_DECREF((PyObject *)self);
+        return PyErr_NoMemory();
+    }
+    return (PyObject *)self;
 }
 
 static void
@@ -95,7 +105,9 @@ formatError(PyObject *exception, IM3Runtime runtime, M3Result err)
     M3ErrorInfo info;
     memset(&info, 0, sizeof(info));
     m3_GetErrorInfo (runtime, &info);
-    if (strlen(info.message)) {
+    // A module that is not loaded into a runtime yet has no runtime to carry error
+    // info, so m3_GetErrorInfo leaves the message NULL
+    if (info.message && strlen(info.message)) {
         PyErr_Format(exception, "%s (%s)", err, info.message);
     } else {
         PyErr_SetString(exception, err);
@@ -166,8 +178,8 @@ M3_Environment_new_runtime(m3_environment *env, PyObject *stack_size_bytes)
     Py_INCREF((PyObject *)env);
     self->env = env;
     self->r = m3_NewRuntime(env->e, n, NULL);
-    self->wasm_bytes = PyList_New(0);
-    if (!self->r || !self->wasm_bytes) {
+    self->keepalive = PyList_New(0);
+    if (!self->r || !self->keepalive) {
         Py_DECREF((PyObject *)self);
         PyErr_NoMemory();
         return NULL;
@@ -180,8 +192,8 @@ delRuntime(m3_runtime *self)
 {
     m3_FreeRuntime(self->r);
     self->r = NULL;
-    Py_XDECREF(self->wasm_bytes);
-    self->wasm_bytes = NULL;
+    Py_XDECREF(self->keepalive);
+    self->keepalive = NULL;
     Py_XDECREF((PyObject *)self->env);
     self->env = NULL;
 }
@@ -206,13 +218,24 @@ M3_Environment_parse_module(m3_environment *env, PyObject *bytes)
         m3_FreeModule(m);
         return NULL;
     }
-    Py_INCREF(bytes);
-    Py_INCREF((PyObject *)env);
-    self->env = env;
+    // PyObject_New() hands back uninitialized memory, so every field the finalizer
+    // touches goes in before anything that can fail.
+    self->env = NULL;
     self->runtime = NULL;
     self->m = m;
-    self->bytes = bytes;
+    self->bytes = NULL;
+    self->linked = NULL;
     self->total_gas = self->current_gas = 0;
+
+    self->linked = PyList_New(0);
+    if (!self->linked) {
+        Py_DECREF((PyObject *)self);        // frees the module through delModule()
+        return NULL;
+    }
+    Py_INCREF(bytes);
+    self->bytes = bytes;
+    Py_INCREF((PyObject *)env);
+    self->env = env;
     return (PyObject *)self;
 }
 
@@ -241,16 +264,23 @@ M3_Runtime_load(m3_runtime *runtime, PyObject *arg)
     }
 
     m3_module *module = (m3_module *)arg;
-    Py_ssize_t byte_ref_index;
 
-    if (PyList_Append(runtime->wasm_bytes, module->bytes) < 0) {
+    // A loaded module belongs to the runtime, which may outlive the Module object, so
+    // the runtime takes over keeping its bytes and its linked callables alive. The list
+    // itself is shared, so functions linked after this still end up covered.
+    Py_ssize_t keep_index = PyList_Size(runtime->keepalive);
+    if (PyList_Append(runtime->keepalive, module->bytes) < 0) {
         return NULL;
     }
-    byte_ref_index = PyList_Size(runtime->wasm_bytes) - 1;
+    if (PyList_Append(runtime->keepalive, module->linked) < 0) {
+        PySequence_DelItem(runtime->keepalive, keep_index);
+        return NULL;
+    }
 
     M3Result err = m3_LoadModule(runtime->r, module->m);
     if (err) {
-        PySequence_DelItem(runtime->wasm_bytes, byte_ref_index);
+        PySequence_DelItem(runtime->keepalive, keep_index + 1);
+        PySequence_DelItem(runtime->keepalive, keep_index);
         return formatError(PyExc_RuntimeError, runtime->r, err);
     }
 
@@ -379,6 +409,10 @@ delModule(m3_module *self)
 
     Py_XDECREF(self->bytes);
     self->bytes = NULL;
+    // Only this module's own reference: a runtime it was loaded into holds the same
+    // list, and the functions in it stay callable through that module.
+    Py_XDECREF(self->linked);
+    self->linked = NULL;
     Py_XDECREF((PyObject *)self->env);
     self->env = NULL;
     Py_XDECREF((PyObject *)runtime);
@@ -399,34 +433,53 @@ m3ApiRawFunction(CallImport)
 
     for (Py_ssize_t i = 0; i < nArgs; ++i) {
         PyObject *arg = get_arg_from_stack(&_sp[i+nRets], m3_GetArgType(f, i));
-        PyTuple_SetItem(pArgs, i, arg);
+        if (!arg) {
+            Py_DECREF(pArgs);
+            m3ApiTrap(trapException);
+        }
+        PyTuple_SetItem(pArgs, i, arg);     // steals the reference
     }
 
     PyObject * pRets = PyObject_CallObject(pFunc, pArgs);
+    Py_DECREF(pArgs);
     if (!pRets) m3ApiTrap(trapException);
 
+    // Single exit from here on: a guest calling an import in a loop would otherwise
+    // leak the result of every single call.
+    M3Result result = m3Err_none;
+
     if (PyTuple_Check(pRets)) {
-        if (PyTuple_Size(pRets) != nRets) {
-            m3ApiTrap("python call: return tuple length mismatch");
-        }
-        for (Py_ssize_t i = 0; i < nRets; ++i) {
-            PyObject *ret = PyTuple_GetItem(pRets, i);
-            if (!ret) m3ApiTrap("python call: return type invalid");
-            put_arg_on_stack(&_sp[i], m3_GetRetType(f, i), ret);
+        if (PyTuple_Size(pRets) == nRets) {
+            for (Py_ssize_t i = 0; i < nRets; ++i) {
+                put_arg_on_stack(&_sp[i], m3_GetRetType(f, i), PyTuple_GetItem(pRets, i));
+            }
+        } else {
+            result = "python call: return tuple length mismatch";
         }
     } else {
         if (nRets == 0) {
-            if (pRets != Py_None) {
-                //m3ApiTrap("python call: return value ignored");
-            }
+            // A value returned where none is expected is dropped, None included.
         } else if (nRets == 1) {
             if (pRets == Py_None) {
-                m3ApiTrap("python call: should return a value");
+                result = "python call: should return a value";
+            } else {
+                put_arg_on_stack(&_sp[0], m3_GetRetType(f, 0), pRets);
             }
-            put_arg_on_stack(&_sp[0], m3_GetRetType(f, 0), pRets);
         } else {
-            m3ApiTrap("python call: should return a tuple");
+            result = "python call: should return a tuple";
         }
+    }
+
+    Py_DECREF(pRets);
+
+    // put_arg_on_stack() leaves an exception set when a returned value is not a number.
+    // Trapping on it here raises it at the call that caused it, instead of leaving it
+    // pending for whatever runs next.
+    if (!result && PyErr_Occurred()) {
+        result = trapException;
+    }
+    if (result) {
+        m3ApiTrap(result);
     }
     m3ApiSuccess();
 }
@@ -454,13 +507,19 @@ M3_Module_link_function(m3_module *self, PyObject *args)
         PyErr_SetString(PyExc_TypeError, "function should be a callable object");
         return NULL;
     }
+    // wasm3 holds pFunc as raw userdata, so the module - and once loaded, the runtime
+    // it was loaded into - owns a reference to it for as long as it can be called.
+    if (PyList_Append(self->linked, pFunc) < 0) {
+        return NULL;
+    }
+
     M3Result err = m3_LinkRawFunctionEx (self->m, as_utf8(mod_name), as_utf8(func_name),
                                          (func_sig?as_utf8(func_sig):NULL), CallImport, pFunc);
     if (err && err != m3Err_functionLookupFailed) {
+        PySequence_DelItem(self->linked, PyList_Size(self->linked) - 1);
         return formatError(PyExc_RuntimeError, m3_GetModuleRuntime(self->m), err);
     }
 
-    Py_INCREF(pFunc);
     Py_RETURN_NONE;
 }
 

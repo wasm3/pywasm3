@@ -9,41 +9,19 @@
 # pywasm3 = { path = "../" }
 # ///
 
-import base64
 import time
 import timeit
 
 import wasm3
 
-"""
-Input module:
-  (module
-    (type (;0;) (func (param i64) (result i64)))
-    (func (;0;) (type 0) (param i64) (result i64)
-      local.get 0
-      i64.const 2
-      i64.lt_u
-      if  ;; label = @1
-        local.get 0
-        return
-      end
-      local.get 0
-      i64.const 2
-      i64.sub
-      call 0
-      local.get 0
-      i64.const 1
-      i64.sub
-      call 0
-      i64.add
-      return)
-    (export "fib" (func 0)))
-"""
-
-# WebAssembly binary
-WASM = base64.b64decode("""
-    AGFzbQEAAAABBgFgAX4BfgMCAQAHBwEDZmliAAAKHwEdACAAQgJUBEAgAA8LIABCAn0QACAAQgF9
-    EAB8Dws=
+WASM = wasm3.wat2wasm("""
+(module
+  (func $fib (export "fib") (param $n i64) (result i64)
+    (if (i64.lt_u (local.get $n) (i64.const 2))
+      (then (return (local.get $n))))
+    (return (i64.add (call $fib (i64.sub (local.get $n) (i64.const 2)))
+                     (call $fib (i64.sub (local.get $n) (i64.const 1))))))
+)
 """)
 
 (N, RES, CYCLES) = (24, 46368, 1000)

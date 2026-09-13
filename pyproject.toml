@@ -45,7 +45,7 @@ where = ["src"]
 include = ["wasm3*"]
 
 [tool.setuptools.package-data]
-wasm3 = ["py.typed", "*.pyi"]
+wasm3 = ["py.typed", "*.pyi", "tools/*.wasm", "tools/LICENSE.wabt", "tools/README.md"]
 
 [tool.setuptools_scm]
 root = "."
@@ -59,8 +59,8 @@ build-frontend = "build[uv]"
 # is separate because Py_LIMITED_API and Py_GIL_DISABLED are incompatible.
 build = "cp311-* cp314t-*"
 test-requires = "pytest"
-# Tests run from a scratch dir, so {project} points pytest at the repo's tests/.
-# Without wabt there, this is effectively the smoke test (see tests/helpers.py).
+# Tests run from a scratch dir, so {project} points pytest at the repo's tests/. They
+# assemble their modules with the wheel's own wabt build, so no toolchain is needed.
 test-command = "pytest {project}/tests"
 
 [tool.cibuildwheel.android]

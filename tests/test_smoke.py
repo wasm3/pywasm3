@@ -1,4 +1,4 @@
-"""Smoke tests on a pre-assembled module - the only ones that run without wabt."""
+"""Smoke tests on pre-assembled modules - the ones that do not go through wabt at all."""
 
 import base64
 import gc
