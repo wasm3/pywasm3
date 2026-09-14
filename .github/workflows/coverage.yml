@@ -24,6 +24,9 @@ jobs:
   test:
     runs-on: ubuntu-latest
     permissions:
+      # A job-level block replaces the defaults wholesale: every scope not listed here
+      # becomes `none`, so contents must be granted explicitly for actions/checkout.
+      contents: read
       id-token: write
     strategy:
       fail-fast: false
@@ -69,7 +72,11 @@ jobs:
           gcovr --root . --filter 'src/wasm3/' --xml coverage.xml --html-details coverage.html --print-summary
         shell: bash
 
+      # Fork PRs are capped at a read-only GITHUB_TOKEN no matter what the permissions
+      # block above asks for, so id-token: write is never granted and the OIDC handshake
+      # fails. Tests + the gcovr summary still run there; only the upload is skipped.
       - name: Upload coverage to Codecov
+        if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
         uses: codecov/codecov-action@v7
         with:
           use_oidc: true
