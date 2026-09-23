@@ -4,7 +4,8 @@
 #include <string.h>
 
 #include "wasm3.h"
-#include "m3_env.h"     // for M3Module.numMemories, which the public API has no getter for
+#include "m3_env.h"     // for fields the public API has no getter for: M3Module.numMemories,
+                        // M3Runtime.isSuspendable and .lastCalled
 
 #define MAX_ARGS 32
 
@@ -59,6 +60,10 @@ static PyObject *M3_Runtime_Type;
 static PyObject *M3_Module_Type;
 static PyObject *M3_Function_Type;
 static PyObject *M3_Memory_Type;
+
+static PyObject *call_outcome(IM3Runtime runtime, IM3Function f, M3Result err);
+// What an import that raised traps with: the Python exception is already set
+static const char* trapException = "function raised exception";
 
 
 m3ApiRawFunction(metering_usegas)
@@ -344,10 +349,102 @@ Runtime_getGasUsed(m3_runtime *self, void * closure)
     return PyFloat_FromDouble(m3_GetGasUsed(self->r));
 }
 
+// Suspendable execution. Like gas metering, the pause points are compiled into the
+// bodies, so this has to be switched on before anything compiles.
+static int
+Runtime_setSuspendable(m3_runtime *self, PyObject *value, void * closure)
+{
+    if (!value) {
+        PyErr_SetString(PyExc_AttributeError, "cannot delete suspendable");
+        return -1;
+    }
+    int enable = PyObject_IsTrue(value);
+    if (enable < 0) {
+        return -1;
+    }
+    m3_SetSuspendable(self->r, enable);
+    return 0;
+}
+
+static PyObject *
+Runtime_getSuspendable(m3_runtime *self, void * closure)
+{
+    return PyBool_FromLong(self->r->isSuspendable);
+}
+
+static PyObject *
+Runtime_getSuspended(m3_runtime *self, void * closure)
+{
+    return PyBool_FromLong(m3_IsSuspended(self->r));
+}
+
+static PyObject *
+M3_Runtime_request_suspend(m3_runtime *self, PyObject *unused)
+{
+    m3_RequestSuspend(self->r);
+    Py_RETURN_NONE;
+}
+
+static PyObject *
+M3_Runtime_resume(m3_runtime *self, PyObject *unused)
+{
+    // m3_ResumeRuntime succeeds at resuming nothing, which would hand back the
+    // results of whatever ran last
+    if (!m3_IsSuspended(self->r)) {
+        PyErr_SetString(PyExc_RuntimeError, "nothing to resume: no call is suspended");
+        return NULL;
+    }
+    M3Result err = m3_ResumeRuntime(self->r);
+    // A resume that finishes leaves its results where the paused call would have,
+    // and names that call in lastCalled - which is the only way to find it when it
+    // was restored from a snapshot rather than made from here.
+    return call_outcome(self->r, self->r->lastCalled, err);
+}
+
+static PyObject *
+M3_Runtime_save_snapshot(m3_runtime *self, PyObject *unused)
+{
+    void *bytes = NULL;
+    size_t size = 0;
+    M3Result err = m3_SaveSnapshotToBuffer(self->r, &bytes, &size);
+    if (err) {
+        return formatError(PyExc_RuntimeError, self->r, err);
+    }
+    PyObject *result = PyBytes_FromStringAndSize((const char *)bytes, (Py_ssize_t)size);
+    m3_Free(bytes);
+    return result;
+}
+
+static PyObject *
+M3_Runtime_load_snapshot(m3_runtime *self, PyObject *args)
+{
+    PyObject *arg;
+    Py_buffer data;
+    if (!PyArg_ParseTuple(args, "O!y*:load_snapshot", (PyTypeObject *)M3_Module_Type, &arg, &data)) {
+        return NULL;
+    }
+    m3_module *module = (m3_module *)arg;
+    if (module->runtime != self) {
+        PyBuffer_Release(&data);
+        PyErr_SetString(PyExc_RuntimeError, "module is not loaded into this runtime");
+        return NULL;
+    }
+    // Read through in full before this returns: nothing keeps the bytes
+    M3Result err = m3_LoadSnapshotFromBuffer(self->r, module->m, data.buf, (size_t)data.len);
+    PyBuffer_Release(&data);
+    if (err) {
+        return formatError(PyExc_RuntimeError, self->r, err);
+    }
+    Py_RETURN_NONE;
+}
+
 static PyGetSetDef M3_Runtime_properties[] = {
     {"gas_limit",   (getter) Runtime_getGasLimit, (setter) Runtime_setGasLimit,
         "gas budget; setting it re-arms the runtime with a full budget, 0 disables metering", NULL},
     {"gas_used",    (getter) Runtime_getGasUsed, NULL, "gas used since gas_limit was last set", NULL},
+    {"suspendable", (getter) Runtime_getSuspendable, (setter) Runtime_setSuspendable,
+        "whether calls can be paused; set it before anything compiles", NULL},
+    {"suspended",   (getter) Runtime_getSuspended, NULL, "whether a paused call is waiting for resume()", NULL},
     {NULL}  /* Sentinel */
 };
 
@@ -356,6 +453,14 @@ static PyMethodDef M3_Runtime_methods[] = {
         PyDoc_STR("load(module) -> None")},
     {"find_function", (PyCFunction)M3_Runtime_find_function,  METH_O,
         PyDoc_STR("find_function(name) -> Function")},
+    {"request_suspend", (PyCFunction)M3_Runtime_request_suspend,  METH_NOARGS,
+        PyDoc_STR("request_suspend() -> None")},
+    {"resume",          (PyCFunction)M3_Runtime_resume,  METH_NOARGS,
+        PyDoc_STR("resume() -> result, or None if it paused again")},
+    {"save_snapshot",   (PyCFunction)M3_Runtime_save_snapshot,  METH_NOARGS,
+        PyDoc_STR("save_snapshot() -> bytes")},
+    {"load_snapshot",   (PyCFunction)M3_Runtime_load_snapshot,  METH_VARARGS,
+        PyDoc_STR("load_snapshot(module, data) -> None")},
     {NULL,              NULL}           /* sentinel */
 };
 
@@ -417,8 +522,6 @@ delModule(m3_module *self)
     self->env = NULL;
     Py_XDECREF((PyObject *)runtime);
 }
-
-static const char* trapException = "function raised exception";
 
 m3ApiRawFunction(CallImport)
 {
@@ -770,13 +873,13 @@ static PyType_Slot M3_Module_Type_slots[] = {
 };
 
 static PyObject *
-get_result_from_stack(m3_function *func)
+get_results(IM3Runtime runtime, IM3Function f)
 {
-    int nRets = m3_GetRetCount(func->f);
+    int nRets = m3_GetRetCount(f);
     if (nRets <= 0) {
         Py_RETURN_NONE;
     }
-    
+
     if (nRets > MAX_ARGS) {
         PyErr_SetString(PyExc_RuntimeError, "too many rets");
         return NULL;
@@ -790,19 +893,19 @@ get_result_from_stack(m3_function *func)
     for (int i = 0; i < nRets; i++) {
         valptrs[i] = &valbuff[i];
     }
-    M3Result err = m3_GetResults (func->f, nRets, valptrs);
+    M3Result err = m3_GetResults (f, nRets, valptrs);
     if (err) {
-        return formatError(PyExc_RuntimeError, func->r, err);
+        return formatError(PyExc_RuntimeError, runtime, err);
     }
 
     if (nRets == 1) {
-        return get_arg_from_stack(valptrs[0], m3_GetRetType(func->f, 0));
+        return get_arg_from_stack(valptrs[0], m3_GetRetType(f, 0));
     } else {
         PyObject *ret = PyTuple_New(nRets);
         if (ret) {
             Py_ssize_t i;
             for (i = 0; i < nRets; ++i) {
-                PyObject *val = get_arg_from_stack(valptrs[i], m3_GetRetType(func->f, i));
+                PyObject *val = get_arg_from_stack(valptrs[i], m3_GetRetType(f, i));
                 PyTuple_SetItem(ret, i, val);
             }
         }
@@ -838,6 +941,22 @@ void print_backtrace(IM3Runtime runtime)
     fprintf(stderr, "\n");
 }
 
+// What a call or a resume hands back to Python: the results, None for one that paused
+// (Runtime.suspended tells the two apart), or the exception.
+static PyObject *
+call_outcome(IM3Runtime runtime, IM3Function f, M3Result err)
+{
+    if (err == m3Err_continuationSuspended) {
+        Py_RETURN_NONE;
+    } else if (err == trapException) {
+        return NULL;
+    } else if (err) {
+        print_backtrace(runtime);
+        return formatError(PyExc_RuntimeError, runtime, err);
+    }
+    return get_results(runtime, f);
+}
+
 static PyObject *
 M3_Function_call_argv(m3_function *func, PyObject *args)
 {
@@ -852,14 +971,7 @@ M3_Function_call_argv(m3_function *func, PyObject *args)
         argv[i] = as_utf8(arg);
     }
     M3Result err = m3_CallArgv(func->f, size, argv);
-    if (err == trapException) {
-        return NULL;
-    } else if (err) {
-        print_backtrace(func->r);
-        return formatError(PyExc_RuntimeError, func->r, err);
-    }
-
-    return get_result_from_stack(func);
+    return call_outcome(func->r, func->f, err);
 }
 
 static PyObject*
@@ -886,14 +998,7 @@ M3_Function_call(m3_function *self, PyObject *args, PyObject *kwargs)
     }
 
     M3Result err = m3_Call (f, nArgs, valptrs);
-    if (err == trapException) {
-        return NULL;
-    } else if (err) {
-        print_backtrace(self->r);
-        return formatError(PyExc_RuntimeError, self->r, err);
-    }
-
-    return get_result_from_stack(self);
+    return call_outcome(self->r, f, err);
 }
 
 static PyObject*

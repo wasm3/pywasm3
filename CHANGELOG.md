@@ -10,6 +10,11 @@ All notable changes to this project are documented here.
   `Environment.parse_module()` accepting WAT directly. The package bundles wabt's
   `wat2wasm`/`wasm2wat` as wasm and runs them on wasm3 itself, so there is no toolchain
   to install and no subprocess to spawn - and the tests need neither.
+- Suspendable execution and snapshots (wasm3/wasm3#268): `Runtime.suspendable`,
+  `request_suspend()`, `suspended`, `resume()`, `save_snapshot()` and `load_snapshot()`.
+  A call can pause at a loop back edge or function entry - on request, or when its gas
+  runs out - return to Python, and continue later, in the same runtime or from a
+  snapshot in a new one. See `examples/04-suspend-resume.py`.
 
 ### Changed
 

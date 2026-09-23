@@ -55,19 +55,6 @@ result = wasm_fib(24)
 print(result)                       # 46368
 ```
 
-## Text format
-
-pywasm3 bundles `wat2wasm` and `wasm2wat` tools from [wabt](https://github.com/WebAssembly/wabt):
-
-```py
-wasm = wasm3.wat2wasm('(module (func (export "f") (result i32) i32.const 42))')
-print(wasm3.wasm2wat(wasm))         # back to text
-```
-
-The optional wasm features wabt leaves off are enabled by default
-(`wasm3.wabt.FEATURE_ARGS`); pass extra flags with `args=[...]`, or use
-`wasm3.wabt.run()` to drive a bundled tool exactly as a command line would.
-
 ## Examples
 
 Every script in [`examples/`](examples) carries its dependencies inline (PEP 723), so
@@ -78,6 +65,7 @@ uv run examples/00-fibonacci.py     # wasm3 vs. pure Python fib(24)
 uv run examples/01-coremark.py      # CoreMark benchmark
 uv run examples/02-metered.py       # gas metering
 uv run examples/03-asyncified.py    # asyncified module driven by asyncio
+uv run examples/04-suspend-resume.py # pause, snapshot, Ctrl+C, resume in a new process
 uv run examples/pygame-doomfire.py  # one of the pygame demos
 ```
 
@@ -88,40 +76,11 @@ locally. Add `--no-sources` to run them against the released package instead:
 uv run --no-sources examples/00-fibonacci.py
 ```
 
+## Documentation
 
-## Building from source
-
-Wasm3 is the `external/wasm3` submodule, so a plain clone has nothing to compile:
-
-```sh
-git clone --recurse-submodules https://github.com/wasm3/pywasm3
-git submodule update --init --recursive   # if already cloned without it
-```
-
-Then `pip install .` or `uv build`. An sdist ships wasm3's sources, so
-`pip install pywasm3 --no-binary pywasm3` needs no submodule handling.
-
-## Development
-
-```sh
-uv sync                  # .venv with the project and dev tools
-uv run pytest
-uv run ruff check
-uv run ruff format
-uv run pyright
-uv run --reinstall pytest                   # after editing src/wasm3/_wasm3.c
-```
-
-The same tools run as `pre-commit` hooks, which is what CI checks:
-
-```sh
-uv tool install pre-commit
-pre-commit run --all-files
-```
-
-Release wheels are built by `.github/workflows/publish.yml` with
-[cibuildwheel](https://cibuildwheel.pypa.io/) for Linux (x86_64/i686/aarch64/armv7l),
-Windows (x64/x86/ARM64), macOS (arm64/x86_64) and Android.
+- [Text format](https://github.com/wasm3/pywasm3/blob/main/docs/text-format.md) - the bundled `wat2wasm` / `wasm2wat`
+- [Suspend, resume and snapshots](https://github.com/wasm3/pywasm3/blob/main/docs/suspend-resume.md) - pause a call, save it, pick it up in another process
+- [Development](https://github.com/wasm3/pywasm3/blob/main/docs/development.md) - building from source, tests, releases
 
 ### License
 This project is released under The MIT License (MIT)
