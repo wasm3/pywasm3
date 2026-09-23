@@ -40,5 +40,11 @@ All notable changes to this project are documented here.
   free-threaded builds.
 - A `memset()` cleared a pointer's worth of a 32-slot argument array.
 - `Environment` can now be subclassed from Python.
+- The free-threaded (`cp314t`) wheels turned the GIL back on at import (wasm3/wasm3#585).
+  The extension now declares `Py_mod_gil`, and locks for itself instead: runtimes in
+  separate `Environment`s run in parallel, while those sharing one take turns, since
+  compiling - which a call does too - writes to the environment. `Runtime.request_suspend()`
+  takes no lock, so it can still interrupt a call running in another thread. Loading a
+  module into a runtime of another `Environment` now raises `RuntimeError`.
 
 [Unreleased]: https://github.com/wasm3/pywasm3/commits/main

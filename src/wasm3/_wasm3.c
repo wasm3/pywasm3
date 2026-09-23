@@ -6,6 +6,7 @@
 #include "wasm3.h"
 #include "m3_env.h"     // for fields the public API has no getter for: M3Module.numMemories,
                         // M3Runtime.isSuspendable and .lastCalled
+#include "m3_host.h"    // m3_HostGuardsActive()
 
 #define MAX_ARGS 32
 
@@ -16,9 +17,22 @@ as_utf8(PyObject *str)
     return PyUnicode_AsUTF8AndSize(str, NULL);
 }
 
+#ifdef Py_GIL_DISABLED
+// A recursive lock: whatever a guest calls back into (an import reading the guest's
+// memory, calling another of its functions) runs on the thread that already holds it.
+typedef struct {
+    PyMutex     mutex;
+    uintptr_t   owner;      // the holding thread's ident, 0 when free
+    int         depth;
+} m3_lock;
+#endif
+
 typedef struct {
     PyObject_HEAD
     IM3Environment e;
+#ifdef Py_GIL_DISABLED
+    m3_lock lock;
+#endif
 } m3_environment;
 
 typedef struct {
@@ -64,6 +78,72 @@ static PyObject *M3_Memory_Type;
 static PyObject *call_outcome(IM3Runtime runtime, IM3Function f, M3Result err);
 // What an import that raised traps with: the Python exception is already set
 static const char* trapException = "function raised exception";
+
+// Without a GIL, nothing else keeps two threads out of wasm3, which is not thread-safe.
+// The unit of locking is the Environment, not the Runtime: runtimes share their
+// environment's type table and code pages, and write to both whenever they compile -
+// which a call does too, as it reaches functions that were not compiled yet. So
+// runtimes in separate environments run in parallel, those sharing one take turns.
+//
+// A PyMutex rather than Py_BEGIN_CRITICAL_SECTION: a critical section is let go
+// whenever the thread blocks, which Python code in an import may well do, and another
+// thread would get into the runtime in the middle of the call.
+#ifdef Py_GIL_DISABLED
+static void
+env_lock(m3_environment *env)
+{
+    if (!env) return;
+    uintptr_t me = (uintptr_t)PyThread_get_thread_ident();
+    // Only this thread ever stores its own ident, so seeing it means it holds the lock
+    if (_Py_atomic_load_uintptr_relaxed(&env->lock.owner) == me) {
+        env->lock.depth++;
+        return;
+    }
+    PyMutex_Lock(&env->lock.mutex);     // detaches from the interpreter while it waits
+    _Py_atomic_store_uintptr_relaxed(&env->lock.owner, me);
+    env->lock.depth = 1;
+}
+
+static void
+env_unlock(m3_environment *env)
+{
+    if (!env) return;
+    if (--env->lock.depth == 0) {
+        _Py_atomic_store_uintptr_relaxed(&env->lock.owner, 0);
+        PyMutex_Unlock(&env->lock.mutex);
+    }
+}
+
+// Guarded memory hands out slots of a single arena for the whole process, and leaves
+// keeping two threads out of it to the embedder (see d_m3GuardedMemory in m3_config.h),
+// so this goes around whatever takes or gives back a slot - loading a module, freeing a
+// runtime or a module, restoring a snapshot - across environments. It is always the
+// innermost lock, and no Python code runs under it.
+// TODO: move this into wasm3 itself - lock Guard_TakeSlot()/Guard_GiveSlot() and make
+// the POSIX fault handler install (install_guard_handlers) happen once - then drop
+// arena_mutex and the m3_HostGuardsActive() call in M3_Runtime_load_unlocked().
+static PyMutex arena_mutex;
+#define arena_lock()        PyMutex_Lock(&arena_mutex)
+#define arena_unlock()      PyMutex_Unlock(&arena_mutex)
+#else
+#define env_lock(env)       ((void)0)
+#define env_unlock(env)     ((void)0)
+#define arena_lock()        ((void)0)
+#define arena_unlock()      ((void)0)
+#endif
+
+// Defines NAME as NAME##_unlocked run under the lock of the environment ENV names,
+// for the methods of the PyObject *(self, PyObject *) shape
+#define WITH_ENV_LOCK(NAME, SELF_TYPE, ENV)             \
+    static PyObject *                                   \
+    NAME(SELF_TYPE *self, PyObject *arg)                \
+    {                                                   \
+        m3_environment *env = (ENV);                    \
+        env_lock(env);                                  \
+        PyObject *result = NAME##_unlocked(self, arg);  \
+        env_unlock(env);                                \
+        return result;                                  \
+    }
 
 
 m3ApiRawFunction(metering_usegas)
@@ -171,7 +251,7 @@ set_tagged_value(M3TaggedValue *tagged, M3ValueType type, PyObject *value)
 }
 
 static PyObject *
-M3_Environment_new_runtime(m3_environment *env, PyObject *stack_size_bytes)
+M3_Environment_new_runtime_unlocked(m3_environment *env, PyObject *stack_size_bytes)
 {
     size_t n = PyLong_AsSize_t(stack_size_bytes);
     if (PyErr_Occurred()) {
@@ -195,7 +275,12 @@ M3_Environment_new_runtime(m3_environment *env, PyObject *stack_size_bytes)
 static void
 delRuntime(m3_runtime *self)
 {
+    // Hands its code pages back to the environment
+    env_lock(self->env);
+    arena_lock();
     m3_FreeRuntime(self->r);
+    arena_unlock();
+    env_unlock(self->env);
     self->r = NULL;
     Py_XDECREF(self->keepalive);
     self->keepalive = NULL;
@@ -204,7 +289,7 @@ delRuntime(m3_runtime *self)
 }
 
 static PyObject *
-M3_Environment_parse_module(m3_environment *env, PyObject *bytes)
+M3_Environment_parse_module_unlocked(m3_environment *env, PyObject *bytes)
 {
     Py_ssize_t size;
     char *data;
@@ -244,6 +329,9 @@ M3_Environment_parse_module(m3_environment *env, PyObject *bytes)
     return (PyObject *)self;
 }
 
+WITH_ENV_LOCK(M3_Environment_new_runtime,   m3_environment, self)
+WITH_ENV_LOCK(M3_Environment_parse_module,  m3_environment, self)
+
 static PyMethodDef M3_Environment_methods[] = {
     {"new_runtime",            (PyCFunction)M3_Environment_new_runtime,  METH_O,
         PyDoc_STR("new_runtime(stack_size_bytes) -> Runtime")},
@@ -261,7 +349,7 @@ static PyType_Slot M3_Environment_Type_slots[] = {
 };
 
 static PyObject *
-M3_Runtime_load(m3_runtime *runtime, PyObject *arg)
+M3_Runtime_load_unlocked(m3_runtime *runtime, PyObject *arg)
 {
     if (!PyObject_TypeCheck(arg, (PyTypeObject *)M3_Module_Type)) {
         PyErr_SetString(PyExc_TypeError, "load expects a Module");
@@ -269,6 +357,13 @@ M3_Runtime_load(m3_runtime *runtime, PyObject *arg)
     }
 
     m3_module *module = (m3_module *)arg;
+
+    // Its types are canonical within the environment it was parsed in, and compiling it
+    // writes there - under that environment's lock, which is the one this call holds.
+    if (module->env != runtime->env) {
+        PyErr_SetString(PyExc_RuntimeError, "module was parsed in a different environment");
+        return NULL;
+    }
 
     // A loaded module belongs to the runtime, which may outlive the Module object, so
     // the runtime takes over keeping its bytes and its linked callables alive. The list
@@ -282,7 +377,15 @@ M3_Runtime_load(m3_runtime *runtime, PyObject *arg)
         return NULL;
     }
 
+    arena_lock();
+#if d_m3GuardedMemory
+    // On POSIX, the first protected call installs the fault handlers - and two of them
+    // racing to do it would each chain to the other. Settling it here, before anything
+    // loaded can be called, keeps it under this lock.
+    m3_HostGuardsActive();
+#endif
     M3Result err = m3_LoadModule(runtime->r, module->m);
+    arena_unlock();
     if (err) {
         PySequence_DelItem(runtime->keepalive, keep_index + 1);
         PySequence_DelItem(runtime->keepalive, keep_index);
@@ -304,7 +407,7 @@ M3_Runtime_load(m3_runtime *runtime, PyObject *arg)
 }
 
 static PyObject *
-M3_Runtime_find_function(m3_runtime *runtime, PyObject *name)
+M3_Runtime_find_function_unlocked(m3_runtime *runtime, PyObject *name)
 {
     IM3Function func = NULL;
     M3Result err = m3_FindFunction(&func, runtime->r, as_utf8(name));
@@ -333,20 +436,28 @@ Runtime_setGasLimit(m3_runtime *self, PyObject *value, void * closure)
     if (gas == -1.0 && PyErr_Occurred()) {
         return -1;
     }
+    env_lock(self->env);
     m3_SetGasLimit(self->r, gas);
+    env_unlock(self->env);
     return 0;
 }
 
 static PyObject *
 Runtime_getGasLimit(m3_runtime *self, void * closure)
 {
-    return PyFloat_FromDouble(m3_GetGasLimit(self->r));
+    env_lock(self->env);
+    double gas = m3_GetGasLimit(self->r);
+    env_unlock(self->env);
+    return PyFloat_FromDouble(gas);
 }
 
 static PyObject *
 Runtime_getGasUsed(m3_runtime *self, void * closure)
 {
-    return PyFloat_FromDouble(m3_GetGasUsed(self->r));
+    env_lock(self->env);
+    double gas = m3_GetGasUsed(self->r);
+    env_unlock(self->env);
+    return PyFloat_FromDouble(gas);
 }
 
 // Suspendable execution. Like gas metering, the pause points are compiled into the
@@ -362,22 +473,32 @@ Runtime_setSuspendable(m3_runtime *self, PyObject *value, void * closure)
     if (enable < 0) {
         return -1;
     }
+    env_lock(self->env);
     m3_SetSuspendable(self->r, enable);
+    env_unlock(self->env);
     return 0;
 }
 
 static PyObject *
 Runtime_getSuspendable(m3_runtime *self, void * closure)
 {
-    return PyBool_FromLong(self->r->isSuspendable);
+    env_lock(self->env);
+    bool enabled = self->r->isSuspendable;
+    env_unlock(self->env);
+    return PyBool_FromLong(enabled);
 }
 
 static PyObject *
 Runtime_getSuspended(m3_runtime *self, void * closure)
 {
-    return PyBool_FromLong(m3_IsSuspended(self->r));
+    env_lock(self->env);
+    bool suspended = m3_IsSuspended(self->r);
+    env_unlock(self->env);
+    return PyBool_FromLong(suspended);
 }
 
+// Takes no lock: it is meant for another thread to interrupt a call that holds it, and
+// all it does is raise a flag the running code polls.
 static PyObject *
 M3_Runtime_request_suspend(m3_runtime *self, PyObject *unused)
 {
@@ -386,7 +507,7 @@ M3_Runtime_request_suspend(m3_runtime *self, PyObject *unused)
 }
 
 static PyObject *
-M3_Runtime_resume(m3_runtime *self, PyObject *unused)
+M3_Runtime_resume_unlocked(m3_runtime *self, PyObject *unused)
 {
     // m3_ResumeRuntime succeeds at resuming nothing, which would hand back the
     // results of whatever ran last
@@ -402,7 +523,7 @@ M3_Runtime_resume(m3_runtime *self, PyObject *unused)
 }
 
 static PyObject *
-M3_Runtime_save_snapshot(m3_runtime *self, PyObject *unused)
+M3_Runtime_save_snapshot_unlocked(m3_runtime *self, PyObject *unused)
 {
     void *bytes = NULL;
     size_t size = 0;
@@ -416,7 +537,7 @@ M3_Runtime_save_snapshot(m3_runtime *self, PyObject *unused)
 }
 
 static PyObject *
-M3_Runtime_load_snapshot(m3_runtime *self, PyObject *args)
+M3_Runtime_load_snapshot_unlocked(m3_runtime *self, PyObject *args)
 {
     PyObject *arg;
     Py_buffer data;
@@ -430,13 +551,21 @@ M3_Runtime_load_snapshot(m3_runtime *self, PyObject *args)
         return NULL;
     }
     // Read through in full before this returns: nothing keeps the bytes
+    arena_lock();
     M3Result err = m3_LoadSnapshotFromBuffer(self->r, module->m, data.buf, (size_t)data.len);
+    arena_unlock();
     PyBuffer_Release(&data);
     if (err) {
         return formatError(PyExc_RuntimeError, self->r, err);
     }
     Py_RETURN_NONE;
 }
+
+WITH_ENV_LOCK(M3_Runtime_load,             m3_runtime, self->env)
+WITH_ENV_LOCK(M3_Runtime_find_function,    m3_runtime, self->env)
+WITH_ENV_LOCK(M3_Runtime_resume,           m3_runtime, self->env)
+WITH_ENV_LOCK(M3_Runtime_save_snapshot,    m3_runtime, self->env)
+WITH_ENV_LOCK(M3_Runtime_load_snapshot,    m3_runtime, self->env)
 
 static PyGetSetDef M3_Runtime_properties[] = {
     {"gas_limit",   (getter) Runtime_getGasLimit, (setter) Runtime_setGasLimit,
@@ -482,21 +611,29 @@ Module_name(m3_module *self, void * closure)
 static int
 Module_setGasLimit(m3_module *self, PyObject *value, void * closure)
 {
-    self->total_gas = PyFloat_AsDouble(value)*10000.0;
-    self->current_gas = self->total_gas;
+    int64_t gas = PyFloat_AsDouble(value)*10000.0;
+    env_lock(self->env);
+    self->total_gas = self->current_gas = gas;
+    env_unlock(self->env);
     return 0;
 }
 
 static PyObject *
 Module_getGasLimit(m3_module *self, void * closure)
 {
-    return PyFloat_FromDouble((double)(self->total_gas)/10000.0);
+    env_lock(self->env);
+    int64_t gas = self->total_gas;
+    env_unlock(self->env);
+    return PyFloat_FromDouble((double)gas/10000.0);
 }
 
 static PyObject *
 Module_getGasUsed(m3_module *self, void * closure)
 {
-    return PyFloat_FromDouble((double)(self->total_gas - self->current_gas)/10000.0);
+    env_lock(self->env);
+    int64_t gas = self->total_gas - self->current_gas;
+    env_unlock(self->env);
+    return PyFloat_FromDouble((double)gas/10000.0);
 }
 
 static void
@@ -509,7 +646,11 @@ delModule(m3_module *self)
     self->runtime = NULL;
 
     if (!runtime) {
+        env_lock(self->env);
+        arena_lock();
         m3_FreeModule(module);
+        arena_unlock();
+        env_unlock(self->env);
     }
 
     Py_XDECREF(self->bytes);
@@ -588,7 +729,7 @@ m3ApiRawFunction(CallImport)
 }
 
 static PyObject *
-M3_Module_link_function(m3_module *self, PyObject *args)
+M3_Module_link_function_unlocked(m3_module *self, PyObject *args)
 {
     PyObject *mod_name, *func_name, *func_sig, *pFunc;
     if (PyTuple_Size(args) == 4) {
@@ -627,7 +768,7 @@ M3_Module_link_function(m3_module *self, PyObject *args)
 }
 
 static PyObject *
-M3_Module_link_global(m3_module *self, PyObject *args)
+M3_Module_link_global_unlocked(m3_module *self, PyObject *args)
 {
     if (PyTuple_Size(args) != 3) {
         PyErr_SetString(PyExc_TypeError, "link_global takes 3 arguments");
@@ -664,7 +805,7 @@ M3_Module_link_global(m3_module *self, PyObject *args)
 }
 
 static PyObject *
-M3_Module_get_global(m3_module *self, PyObject *name)
+M3_Module_get_global_unlocked(m3_module *self, PyObject *name)
 {
     M3TaggedValue tagged;
     IM3Global g = m3_FindGlobal(self->m, as_utf8(name));
@@ -682,7 +823,7 @@ M3_Module_get_global(m3_module *self, PyObject *name)
 }
 
 static PyObject *
-M3_Module_set_global(m3_module *self, PyObject *args)
+M3_Module_set_global_unlocked(m3_module *self, PyObject *args)
 {
     if (PyTuple_Size(args) != 2) {
         PyErr_SetString(PyExc_TypeError, "set_global takes 2 arguments");
@@ -709,7 +850,7 @@ M3_Module_set_global(m3_module *self, PyObject *args)
 }
 
 static PyObject *
-M3_Module_get_memory(m3_module *self, PyObject *args)
+M3_Module_get_memory_unlocked(m3_module *self, PyObject *args)
 {
     PyObject *key = NULL;
     if (!PyArg_ParseTuple(args, "|O:get_memory", &key)) {
@@ -758,7 +899,9 @@ static uint8_t *
 memory_data(m3_memory *self, Py_ssize_t *o_size)
 {
     size_t size = 0;
+    env_lock(self->module->env);
     uint8_t *data = m3_GetMemory(self->module->m, &size, self->index);
+    env_unlock(self->module->env);
     *o_size = (size > PY_SSIZE_T_MAX) ? PY_SSIZE_T_MAX : (Py_ssize_t)size;
     return data;
 }
@@ -781,12 +924,18 @@ Memory_length(m3_memory *self)
 }
 
 // Indexing goes through a memoryview of the memory as it is right now, which gives
-// ints, slices, steps and bounds checks their usual meaning.
+// ints, slices, steps and bounds checks their usual meaning. The lock is held for as
+// long as the view is, so a guest running in another thread cannot grow the memory
+// out from under it.
 static PyObject *
 Memory_subscript(m3_memory *self, PyObject *key)
 {
+    env_lock(self->module->env);
     PyObject *view = PyMemoryView_FromObject((PyObject *)self);
-    if (!view) return NULL;
+    if (!view) {
+        env_unlock(self->module->env);
+        return NULL;
+    }
     PyObject *item = PyObject_GetItem(view, key);
     // A slice would still point into the memory: hand out a copy instead
     if (item && !PyLong_Check(item)) {
@@ -795,6 +944,7 @@ Memory_subscript(m3_memory *self, PyObject *key)
         item = copy;
     }
     Py_DECREF(view);
+    env_unlock(self->module->env);
     return item;
 }
 
@@ -805,10 +955,11 @@ Memory_ass_subscript(m3_memory *self, PyObject *key, PyObject *value)
         PyErr_SetString(PyExc_TypeError, "cannot delete memory");
         return -1;
     }
+    env_lock(self->module->env);
     PyObject *view = PyMemoryView_FromObject((PyObject *)self);
-    if (!view) return -1;
-    int res = PyObject_SetItem(view, key, value);
-    Py_DECREF(view);
+    int res = view ? PyObject_SetItem(view, key, value) : -1;
+    Py_XDECREF(view);
+    env_unlock(self->module->env);
     return res;
 }
 
@@ -843,6 +994,12 @@ static PyGetSetDef M3_Module_properties[] = {
     {"gasUsed",     (getter) Module_getGasUsed, NULL, "gas used", NULL},
     {0},
 };
+
+WITH_ENV_LOCK(M3_Module_link_function,     m3_module, self->env)
+WITH_ENV_LOCK(M3_Module_link_global,       m3_module, self->env)
+WITH_ENV_LOCK(M3_Module_get_global,        m3_module, self->env)
+WITH_ENV_LOCK(M3_Module_set_global,        m3_module, self->env)
+WITH_ENV_LOCK(M3_Module_get_memory,        m3_module, self->env)
 
 static PyMethodDef M3_Module_methods[] = {
     {"link_function", (PyCFunction)M3_Module_link_function,  METH_VARARGS,
@@ -958,7 +1115,7 @@ call_outcome(IM3Runtime runtime, IM3Function f, M3Result err)
 }
 
 static PyObject *
-M3_Function_call_argv(m3_function *func, PyObject *args)
+M3_Function_call_argv_unlocked(m3_function *func, PyObject *args)
 {
     Py_ssize_t size = PyTuple_Size(args);
     const char* argv[MAX_ARGS];
@@ -975,7 +1132,7 @@ M3_Function_call_argv(m3_function *func, PyObject *args)
 }
 
 static PyObject*
-M3_Function_call(m3_function *self, PyObject *args, PyObject *kwargs)
+M3_Function_call_unlocked(m3_function *self, PyObject *args)
 {
     IM3Function f = self->f;
 
@@ -999,6 +1156,15 @@ M3_Function_call(m3_function *self, PyObject *args, PyObject *kwargs)
 
     M3Result err = m3_Call (f, nArgs, valptrs);
     return call_outcome(self->r, f, err);
+}
+
+WITH_ENV_LOCK(M3_Function_call_argv,       m3_function, self->runtime->env)
+WITH_ENV_LOCK(M3_Function_call,            m3_function, self->runtime->env)
+
+static PyObject*
+M3_Function_tp_call(m3_function *self, PyObject *args, PyObject *kwargs)
+{
+    return M3_Function_call(self, args);
 }
 
 static PyObject*
@@ -1075,7 +1241,7 @@ static PyType_Slot M3_Function_Type_slots[] = {
     {Py_tp_doc, "The wasm3.Function type"},
     {Py_tp_finalize, delFunction},
     // {Py_tp_new, newFunction},
-    {Py_tp_call, M3_Function_call},
+    {Py_tp_call, M3_Function_tp_call},
     {Py_tp_methods, M3_Function_methods},
     {Py_tp_getset, M3_Function_properties},
     {0, 0}
@@ -1161,6 +1327,10 @@ m3_modexec(PyObject *m)
 
 static PyModuleDef_Slot m3_slots[] = {
     {Py_mod_exec, m3_modexec},
+#ifdef Py_GIL_DISABLED
+    // Everything that reaches into wasm3 takes its environment's lock - see env_lock()
+    {Py_mod_gil, Py_MOD_GIL_NOT_USED},
+#endif
     {0, NULL}
 };
 
