@@ -62,4 +62,4 @@ repos:
         # The wasm3 submodule is upstream's code, not ours to spellcheck.
         exclude: '^external/'
         # gameboy/woh: a console's name and a local variable in examples/, not typos.
-        args: ["--ignore-words-list=gameboy,woh"]
+        args: ["--ignore-words-list=gameboy,woh,wast"]
