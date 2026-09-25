@@ -386,14 +386,19 @@ M3_Runtime_load_unlocked(m3_runtime *runtime, PyObject *arg)
 #endif
     M3Result err = m3_LoadModule(runtime->r, module->m);
     arena_unlock();
-    if (err) {
+    if (err == m3Err_moduleAlreadyLinked) {
         PySequence_DelItem(runtime->keepalive, keep_index + 1);
         PySequence_DelItem(runtime->keepalive, keep_index);
         return formatError(PyExc_RuntimeError, runtime->r, err);
     }
 
+    // A load that fails past that point still leaves the runtime owning the module (its
+    // functions may already sit in another module's table), so it is loaded all the same
     Py_INCREF((PyObject *)runtime);
     module->runtime = runtime;
+    if (err) {
+        return formatError(PyExc_RuntimeError, runtime->r, err);
+    }
 
     err = m3_LinkRawFunctionEx (module->m, "metering", "usegas", "v(i)", &metering_usegas, module);
     /*if (!err) {
@@ -423,8 +428,22 @@ M3_Runtime_find_function_unlocked(m3_runtime *runtime, PyObject *name)
     return (PyObject *)self;
 }
 
+static int
+set_resource_limit(m3_runtime *self, M3ResourceLimit limit, uint64_t value)
+{
+    env_lock(self->env);
+    M3Result err = m3_SetResourceLimit(self->r, limit, value);
+    env_unlock(self->env);
+    if (err) {
+        PyErr_SetString(err == m3Err_resourceLimitBelowUsage ? PyExc_ValueError : PyExc_RuntimeError, err);
+        return -1;
+    }
+    return 0;
+}
+
 // Native gas metering: wasm3 instruments bodies as it compiles them, so the limit
 // must be set before anything runs (find_function compiles, and runs the start function).
+// wasm3 counts whole units, M3_GAS_UNITS_PER_GAS to a gas; Python speaks in gas.
 static int
 Runtime_setGasLimit(m3_runtime *self, PyObject *value, void * closure)
 {
@@ -436,28 +455,75 @@ Runtime_setGasLimit(m3_runtime *self, PyObject *value, void * closure)
     if (gas == -1.0 && PyErr_Occurred()) {
         return -1;
     }
-    env_lock(self->env);
-    m3_SetGasLimit(self->r, gas);
-    env_unlock(self->env);
-    return 0;
+    // Saturates rather than overflowing the cast; wasm3 then saturates at INT64_MAX.
+    // Negatives (and NaN) arm an empty budget, as 0 does.
+    uint64_t units;
+    if (gas >= (double)UINT64_MAX / M3_GAS_UNITS_PER_GAS) {
+        units = UINT64_MAX;
+    } else if (gas > 0) {
+        units = (uint64_t)(gas * M3_GAS_UNITS_PER_GAS);
+    } else {
+        units = 0;
+    }
+    return set_resource_limit(self, c_m3Limit_GasUnits, units);
 }
 
 static PyObject *
 Runtime_getGasLimit(m3_runtime *self, void * closure)
 {
     env_lock(self->env);
-    double gas = m3_GetGasLimit(self->r);
+    uint64_t units = m3_GetResourceLimit(self->r, c_m3Limit_GasUnits);
     env_unlock(self->env);
-    return PyFloat_FromDouble(gas);
+    return PyFloat_FromDouble((double)units / M3_GAS_UNITS_PER_GAS);
 }
 
 static PyObject *
 Runtime_getGasUsed(m3_runtime *self, void * closure)
 {
     env_lock(self->env);
-    double gas = m3_GetGasUsed(self->r);
+    uint64_t units = m3_GetResourceUsage(self->r, c_m3Limit_GasUnits);
     env_unlock(self->env);
-    return PyFloat_FromDouble(gas);
+    return PyFloat_FromDouble((double)units / M3_GAS_UNITS_PER_GAS);
+}
+
+// Allocation caps: memory bytes, table elements, continuation stacks. The closure is the
+// M3ResourceLimit. Totals across every module loaded into the runtime, 0 is unlimited,
+// and a cap below what is already in use is refused.
+static int
+Runtime_setResourceLimit(m3_runtime *self, PyObject *value, void * closure)
+{
+    if (!value) {
+        PyErr_SetString(PyExc_AttributeError, "cannot delete a resource limit");
+        return -1;
+    }
+    PyObject *index = PyNumber_Index(value);
+    if (!index) {
+        return -1;
+    }
+    unsigned long long limit = PyLong_AsUnsignedLongLong(index);
+    Py_DECREF(index);
+    if (limit == (unsigned long long)-1 && PyErr_Occurred()) {
+        return -1;
+    }
+    return set_resource_limit(self, (M3ResourceLimit)(intptr_t)closure, limit);
+}
+
+static PyObject *
+Runtime_getResourceLimit(m3_runtime *self, void * closure)
+{
+    env_lock(self->env);
+    uint64_t limit = m3_GetResourceLimit(self->r, (M3ResourceLimit)(intptr_t)closure);
+    env_unlock(self->env);
+    return PyLong_FromUnsignedLongLong(limit);
+}
+
+static PyObject *
+Runtime_getResourceUsage(m3_runtime *self, void * closure)
+{
+    env_lock(self->env);
+    uint64_t used = m3_GetResourceUsage(self->r, (M3ResourceLimit)(intptr_t)closure);
+    env_unlock(self->env);
+    return PyLong_FromUnsignedLongLong(used);
 }
 
 // Suspendable execution. Like gas metering, the pause points are compiled into the
@@ -571,6 +637,18 @@ static PyGetSetDef M3_Runtime_properties[] = {
     {"gas_limit",   (getter) Runtime_getGasLimit, (setter) Runtime_setGasLimit,
         "gas budget; setting it re-arms the runtime with a full budget, 0 disables metering", NULL},
     {"gas_used",    (getter) Runtime_getGasUsed, NULL, "gas used since gas_limit was last set", NULL},
+    {"memory_limit", (getter) Runtime_getResourceLimit, (setter) Runtime_setResourceLimit,
+        "cap on linear memory bytes across the runtime, 0 for none", (void *)(intptr_t)c_m3Limit_MemoryBytes},
+    {"memory_used", (getter) Runtime_getResourceUsage, NULL,
+        "linear memory bytes allocated across the runtime", (void *)(intptr_t)c_m3Limit_MemoryBytes},
+    {"table_limit", (getter) Runtime_getResourceLimit, (setter) Runtime_setResourceLimit,
+        "cap on table elements across the runtime, 0 for none", (void *)(intptr_t)c_m3Limit_TableElements},
+    {"table_used",  (getter) Runtime_getResourceUsage, NULL,
+        "table elements allocated across the runtime", (void *)(intptr_t)c_m3Limit_TableElements},
+    {"continuation_limit", (getter) Runtime_getResourceLimit, (setter) Runtime_setResourceLimit,
+        "cap on concurrently active continuation stacks, 0 for none", (void *)(intptr_t)c_m3Limit_Continuations},
+    {"continuation_used", (getter) Runtime_getResourceUsage, NULL,
+        "continuation stacks currently active", (void *)(intptr_t)c_m3Limit_Continuations},
     {"suspendable", (getter) Runtime_getSuspendable, (setter) Runtime_setSuspendable,
         "whether calls can be paused; set it before anything compiles", NULL},
     {"suspended",   (getter) Runtime_getSuspended, NULL, "whether a paused call is waiting for resume()", NULL},
@@ -611,7 +689,7 @@ Module_name(m3_module *self, void * closure)
 static int
 Module_setGasLimit(m3_module *self, PyObject *value, void * closure)
 {
-    int64_t gas = PyFloat_AsDouble(value)*10000.0;
+    int64_t gas = PyFloat_AsDouble(value)*M3_GAS_UNITS_PER_GAS;
     env_lock(self->env);
     self->total_gas = self->current_gas = gas;
     env_unlock(self->env);
@@ -624,7 +702,7 @@ Module_getGasLimit(m3_module *self, void * closure)
     env_lock(self->env);
     int64_t gas = self->total_gas;
     env_unlock(self->env);
-    return PyFloat_FromDouble((double)gas/10000.0);
+    return PyFloat_FromDouble((double)gas/M3_GAS_UNITS_PER_GAS);
 }
 
 static PyObject *
@@ -633,7 +711,7 @@ Module_getGasUsed(m3_module *self, void * closure)
     env_lock(self->env);
     int64_t gas = self->total_gas - self->current_gas;
     env_unlock(self->env);
-    return PyFloat_FromDouble((double)gas/10000.0);
+    return PyFloat_FromDouble((double)gas/M3_GAS_UNITS_PER_GAS);
 }
 
 static void

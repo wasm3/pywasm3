@@ -26,3 +26,8 @@ and can be called from an import.
 [`examples/04-suspend-resume.py`](../examples/04-suspend-resume.py) runs a long search in
 slices with a progress bar; Ctrl+C saves it to a file, and running the script again picks
 it up where it left off.
+
+The resource caps (`rt.memory_limit`, `table_limit`, `continuation_limit`) belong to the
+host and are not part of a snapshot. `load_snapshot()` checks that the runtime's caps
+leave room for what the snapshot needs, and raises `RuntimeError` if they don't. The
+module is left as it was, so you can raise the cap and try again.

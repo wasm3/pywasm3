@@ -15,10 +15,18 @@ All notable changes to this project are documented here.
   A call can pause at a loop back edge or function entry - on request, or when its gas
   runs out - return to Python, and continue later, in the same runtime or from a
   snapshot in a new one. See `examples/04-suspend-resume.py`.
+- Resource caps (wasm3/wasm3@625046b): `Runtime.memory_limit` (linear memory bytes),
+  `table_limit` (table elements) and `continuation_limit` (active continuation stacks),
+  with `memory_used`, `table_used` and `continuation_used` beside them. Caps are totals
+  across the runtime's modules, 0 for none; one below current usage raises `ValueError`.
+  Over a cap, `memory.grow`/`table.grow` return -1, `load()` and `load_snapshot()` raise
+  `RuntimeError`, and `cont.new` traps.
 
 ### Changed
 
 - wasm3 is now the `external/wasm3` submodule instead of a vendored copy.
+- `Runtime.gas_limit`/`gas_used` sit on wasm3's `m3_SetResourceLimit()`, which
+  replaced `m3_SetGasLimit()`; they still speak in gas.
 - The package is `src/wasm3/`, ships `py.typed` and type stubs, and builds with
   `pyproject.toml` + `uv`, versioned from git tags.
 - Wheels use the stable ABI (`cp311-abi3`): one wheel per platform covers CPython 3.11
@@ -46,5 +54,8 @@ All notable changes to this project are documented here.
   compiling - which a call does too - writes to the environment. `Runtime.request_suspend()`
   takes no lock, so it can still interrupt a call running in another thread. Loading a
   module into a runtime of another `Environment` now raises `RuntimeError`.
+- A module whose `Runtime.load()` failed part way was freed twice - once by wasm3's
+  runtime, which keeps it either way, and once by the `Module`'s finalizer. It now
+  stays loaded, and loading it again raises `RuntimeError`.
 
 [Unreleased]: https://github.com/wasm3/pywasm3/commits/main

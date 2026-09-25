@@ -23,6 +23,22 @@ class Runtime:
     gas_limit: float
     @property
     def gas_used(self) -> float: ...
+
+    # Resource caps: totals across every module loaded into the runtime, 0 for none.
+    # Usage is tracked without a cap too. A cap below current usage raises ValueError.
+    # Over the cap, memory.grow and table.grow return -1, load() raises RuntimeError
+    # ("runtime memory limit exceeded" / "table elements limit exceeded"), and cont.new
+    # traps. Imported memories and tables count once. Snapshots don't carry the caps:
+    # load_snapshot() refuses, leaving the module reusable, if they're too low for it.
+    memory_limit: int  # linear memory bytes
+    @property
+    def memory_used(self) -> int: ...
+    table_limit: int  # table elements
+    @property
+    def table_used(self) -> int: ...
+    continuation_limit: int  # concurrently active continuation stacks
+    @property
+    def continuation_used(self) -> int: ...
     def load(self, module: Module, /) -> None: ...
     def find_function(self, name: str, /) -> Function: ...
 
