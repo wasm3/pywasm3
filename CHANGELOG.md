@@ -21,9 +21,18 @@ All notable changes to this project are documented here.
   across the runtime's modules, 0 for none; one below current usage raises `ValueError`.
   Over a cap, `memory.grow`/`table.grow` return -1, `load()` and `load_snapshot()` raise
   `RuntimeError`, and `cont.new` traps.
+- Exception handling across the host boundary (wasm3's new tag API): an exception the
+  guest doesn't catch raises `wasm3.WasmException`, carrying its `tag` and `payload`; an
+  import raises one to throw into the guest. `Runtime.new_tag()`, `Module.get_tag()` and
+  `Module.link_tag()` make, find and link tags. See [docs/exceptions.md](docs/exceptions.md).
 
 ### Changed
 
+- An `Exception` raised by an import crosses the guest as a Wasm exception: `catch_all`
+  can catch it, and one that leaves the guest is raised as the same object. Other
+  `BaseException`s - `KeyboardInterrupt`, `SystemExit` - trap, as every one did before.
+- An uncaught Wasm exception raises `WasmException`, a `RuntimeError` whose message is
+  its tag and payload rather than `[trap] uncaught exception`.
 - wasm3 is now the `external/wasm3` submodule instead of a vendored copy.
 - `Runtime.gas_limit`/`gas_used` sit on wasm3's `m3_SetResourceLimit()`, which
   replaced `m3_SetGasLimit()`; they still speak in gas.

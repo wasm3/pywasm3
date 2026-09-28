@@ -5,7 +5,7 @@
 
 #include "wasm3.h"
 #include "m3_env.h"     // for fields the public API has no getter for: M3Module.numMemories,
-                        // M3Runtime.isSuspendable and .lastCalled
+                        // M3Runtime.isSuspendable, .lastCalled and .callNesting
 #include "m3_host.h"    // m3_HostGuardsActive()
 
 #define MAX_ARGS 32
@@ -42,6 +42,10 @@ typedef struct {
     // Whatever a loaded module needs to outlive its Module object: the bytes wasm3
     // parsed it from, and the callables linked into its imports.
     PyObject *keepalive;
+    // Python exceptions on their way through Wasm, as (type, value, traceback), each
+    // thrown with error_tag and its index here as the payload (see raise_into_wasm)
+    PyObject *errors;
+    IM3Tag error_tag;       // made on first use
 } m3_runtime;
 
 typedef struct {
@@ -69,13 +73,22 @@ typedef struct {
     uint32_t index;
 } m3_memory;
 
+typedef struct {
+    PyObject_HEAD
+    IM3Tag t;
+    m3_runtime *runtime;    // the tag lives as long as the runtime it was made in
+} m3_tag;
+
 static PyObject *M3_Environment_Type;
 static PyObject *M3_Runtime_Type;
 static PyObject *M3_Module_Type;
 static PyObject *M3_Function_Type;
 static PyObject *M3_Memory_Type;
+static PyObject *M3_Tag_Type;
+static PyObject *M3_WasmException;
 
 static PyObject *call_outcome(IM3Runtime runtime, IM3Function f, M3Result err);
+static PyObject *raise_uncaught(IM3Runtime runtime, M3Result err);
 // What an import that raised traps with: the Python exception is already set
 static const char* trapException = "function raised exception";
 
@@ -219,6 +232,9 @@ get_arg_from_stack(uint64_t *s, M3ValueType type)
         case c_m3Type_i64:  return PyLong_FromLongLong( *(int64_t*)s);  break;
         case c_m3Type_f32:  return PyFloat_FromDouble(  *(float*)s);    break;
         case c_m3Type_f64:  return PyFloat_FromDouble(  *(double*)s);   break;
+        // what one points at is freed when the outermost call ends
+        case c_m3Type_exnref:
+            return PyErr_Format(PyExc_TypeError, "an exnref cannot be passed to Python");
         default:
             return PyErr_Format(PyExc_TypeError, "unknown type %d", (int)type);
     }
@@ -262,9 +278,13 @@ M3_Environment_new_runtime_unlocked(m3_environment *env, PyObject *stack_size_by
     if (!self) return NULL;
     Py_INCREF((PyObject *)env);
     self->env = env;
-    self->r = m3_NewRuntime(env->e, n, NULL);
+    self->error_tag = NULL;
+    // The userdata is how an import finds the runtime object again: borrowed, since
+    // the runtime object is what frees the runtime
+    self->r = m3_NewRuntime(env->e, n, self);
     self->keepalive = PyList_New(0);
-    if (!self->r || !self->keepalive) {
+    self->errors = PyList_New(0);
+    if (!self->r || !self->keepalive || !self->errors) {
         Py_DECREF((PyObject *)self);
         PyErr_NoMemory();
         return NULL;
@@ -282,8 +302,11 @@ delRuntime(m3_runtime *self)
     arena_unlock();
     env_unlock(self->env);
     self->r = NULL;
+    self->error_tag = NULL;     // freed along with the runtime
     Py_XDECREF(self->keepalive);
     self->keepalive = NULL;
+    Py_XDECREF(self->errors);
+    self->errors = NULL;
     Py_XDECREF((PyObject *)self->env);
     self->env = NULL;
 }
@@ -627,8 +650,36 @@ M3_Runtime_load_snapshot_unlocked(m3_runtime *self, PyObject *args)
     Py_RETURN_NONE;
 }
 
+static PyObject *
+new_tag_object(m3_runtime *runtime, IM3Tag tag)
+{
+    m3_tag *self = PyObject_New(m3_tag, (PyTypeObject *)M3_Tag_Type);
+    if (!self) return NULL;
+    Py_INCREF((PyObject *)runtime);
+    self->t = tag;
+    self->runtime = runtime;
+    return (PyObject *)self;
+}
+
+static PyObject *
+M3_Runtime_new_tag_unlocked(m3_runtime *self, PyObject *signature)
+{
+    const char *sig = as_utf8(signature);
+    if (!sig) {
+        return NULL;
+    }
+    IM3Tag tag = NULL;
+    M3Result err = m3_NewTag(self->r, &tag, sig);
+    if (err) {
+        PyErr_Format(PyExc_ValueError, "%s: '%s'", err, sig);
+        return NULL;
+    }
+    return new_tag_object(self, tag);
+}
+
 WITH_ENV_LOCK(M3_Runtime_load,             m3_runtime, self->env)
 WITH_ENV_LOCK(M3_Runtime_find_function,    m3_runtime, self->env)
+WITH_ENV_LOCK(M3_Runtime_new_tag,          m3_runtime, self->env)
 WITH_ENV_LOCK(M3_Runtime_resume,           m3_runtime, self->env)
 WITH_ENV_LOCK(M3_Runtime_save_snapshot,    m3_runtime, self->env)
 WITH_ENV_LOCK(M3_Runtime_load_snapshot,    m3_runtime, self->env)
@@ -660,6 +711,8 @@ static PyMethodDef M3_Runtime_methods[] = {
         PyDoc_STR("load(module) -> None")},
     {"find_function", (PyCFunction)M3_Runtime_find_function,  METH_O,
         PyDoc_STR("find_function(name) -> Function")},
+    {"new_tag",         (PyCFunction)M3_Runtime_new_tag,  METH_O,
+        PyDoc_STR("new_tag(signature) -> Tag")},
     {"request_suspend", (PyCFunction)M3_Runtime_request_suspend,  METH_NOARGS,
         PyDoc_STR("request_suspend() -> None")},
     {"resume",          (PyCFunction)M3_Runtime_resume,  METH_NOARGS,
@@ -742,6 +795,134 @@ delModule(m3_module *self)
     Py_XDECREF((PyObject *)runtime);
 }
 
+// A WasmException an import raised, thrown as what it says it is, so that a catch
+// naming its tag gets its payload. Returns trapException with a TypeError set when
+// the tag or the payload won't do.
+static M3Result
+throw_tagged(m3_runtime *self, PyObject *exc)
+{
+    M3Result result = trapException;
+    PyObject *args = PyObject_GetAttrString(exc, "args");
+    if (!args) {
+        return trapException;
+    }
+    Py_ssize_t size = PyTuple_Size(args);
+    PyObject *first = size > 0 ? PyTuple_GetItem(args, 0) : NULL;
+    if (!first || !PyObject_TypeCheck(first, (PyTypeObject *)M3_Tag_Type)) {
+        PyErr_SetString(PyExc_TypeError, "WasmException takes a wasm3.Tag, then the payload");
+        goto done;
+    }
+    m3_tag *tag = (m3_tag *)first;
+    uint32_t count = m3_GetTagArgCount(tag->t);
+    if ((Py_ssize_t)count != size - 1) {
+        PyErr_Format(PyExc_TypeError, "the tag carries %u values, not %zd", count, size - 1);
+        goto done;
+    }
+    if (count > MAX_ARGS) {
+        PyErr_SetString(PyExc_TypeError, "too many values");
+        goto done;
+    }
+
+    uint64_t    valbuff[MAX_ARGS];
+    const void* valptrs[MAX_ARGS];
+    memset(valbuff, 0, sizeof(valbuff));
+    for (uint32_t i = 0; i < count; ++i) {
+        valptrs[i] = &valbuff[i];
+        put_arg_on_stack(&valbuff[i], m3_GetTagArgType(tag->t, i), PyTuple_GetItem(args, i + 1));
+    }
+    if (PyErr_Occurred()) {
+        goto done;
+    }
+    // A tag of another runtime's is only as long-lived as that runtime, which the
+    // WasmException is about to stop keeping alive - and an uncaught exception
+    // names the tag again after it is gone
+    if (tag->runtime != self) {
+        int kept = PySequence_Contains(self->keepalive, first);
+        if (kept < 0 || (!kept && PyList_Append(self->keepalive, first) < 0)) {
+            goto done;
+        }
+    }
+    result = m3_ThrowException(self->r, tag->t, count, valptrs);
+ done:
+    Py_DECREF(args);
+    return result;
+}
+
+// What an import that raised hands back to Wasm. An Exception crosses as a Wasm
+// exception: a WasmException as itself, anything else with the runtime's error tag,
+// which only catch_all and catch_all_ref catch, and which comes back out as the very
+// same Python exception if nothing does. Anything else - KeyboardInterrupt,
+// SystemExit - traps, where no catch_all can hold on to it.
+static M3Result
+raise_into_wasm(IM3Runtime r)
+{
+    m3_runtime *self = (m3_runtime *)m3_GetUserData(r);
+    if (!self || !PyErr_ExceptionMatches(PyExc_Exception)) {
+        return trapException;
+    }
+
+    PyObject *type, *value, *tb;
+    PyErr_Fetch(&type, &value, &tb);
+    PyErr_NormalizeException(&type, &value, &tb);
+    if (tb) {
+        PyException_SetTraceback(value, tb);
+    }
+
+    int tagged = PyObject_IsInstance(value, M3_WasmException);
+    if (tagged == 1) {
+        M3Result result = throw_tagged(self, value);
+        if (result != trapException) {
+            Py_DECREF(type);
+            Py_DECREF(value);
+            Py_XDECREF(tb);
+            return result;
+        }
+    }
+    if (tagged != 0) {
+        // what said the WasmException would not do goes instead
+        PyObject *cause = value;
+        Py_DECREF(type);
+        Py_XDECREF(tb);
+        PyErr_Fetch(&type, &value, &tb);
+        PyErr_NormalizeException(&type, &value, &tb);
+        if (tb) {
+            PyException_SetTraceback(value, tb);
+        }
+        PyException_SetContext(value, cause);   // steals cause
+    }
+
+    M3Result result = trapException;
+    Py_ssize_t index = PyList_Size(self->errors);
+    PyObject *entry = PyTuple_Pack(3, type, value, tb ? tb : Py_None);
+    if (!entry || PyList_Append(self->errors, entry) < 0) {
+        goto fail;
+    }
+    if (!self->error_tag) {
+        // v(I): the index into self->errors
+        M3Result err = m3_NewTag(r, &self->error_tag, "v(I)");
+        if (err) {
+            PyErr_SetString(PyExc_RuntimeError, err);
+            goto fail;
+        }
+    }
+    int64_t     payload = index;
+    const void* args[] = { &payload };
+    result = m3_ThrowException(r, self->error_tag, 1, args);
+    Py_DECREF(entry);
+    Py_DECREF(type);
+    Py_DECREF(value);
+    Py_XDECREF(tb);
+    return result;
+
+ fail:
+    // Out of memory, most likely. The trap carries that error, not the original.
+    Py_XDECREF(entry);
+    Py_DECREF(type);
+    Py_DECREF(value);
+    Py_XDECREF(tb);
+    return trapException;
+}
+
 m3ApiRawFunction(CallImport)
 {
     PyObject *pFunc = (PyObject *)(_ctx->userdata);
@@ -757,14 +938,14 @@ m3ApiRawFunction(CallImport)
         PyObject *arg = get_arg_from_stack(&_sp[i+nRets], m3_GetArgType(f, i));
         if (!arg) {
             Py_DECREF(pArgs);
-            m3ApiTrap(trapException);
+            return raise_into_wasm(runtime);
         }
         PyTuple_SetItem(pArgs, i, arg);     // steals the reference
     }
 
     PyObject * pRets = PyObject_CallObject(pFunc, pArgs);
     Py_DECREF(pArgs);
-    if (!pRets) m3ApiTrap(trapException);
+    if (!pRets) return raise_into_wasm(runtime);
 
     // Single exit from here on: a guest calling an import in a loop would otherwise
     // leak the result of every single call.
@@ -795,10 +976,10 @@ m3ApiRawFunction(CallImport)
     Py_DECREF(pRets);
 
     // put_arg_on_stack() leaves an exception set when a returned value is not a number.
-    // Trapping on it here raises it at the call that caused it, instead of leaving it
+    // Throwing it here raises it at the call that caused it, instead of leaving it
     // pending for whatever runs next.
     if (!result && PyErr_Occurred()) {
-        result = trapException;
+        return raise_into_wasm(runtime);
     }
     if (result) {
         m3ApiTrap(result);
@@ -879,6 +1060,46 @@ M3_Module_link_global_unlocked(m3_module *self, PyObject *args)
         return formatError(PyExc_RuntimeError, m3_GetModuleRuntime(self->m), err);
     }
 
+    Py_RETURN_NONE;
+}
+
+static PyObject *
+M3_Module_get_tag_unlocked(m3_module *self, PyObject *name)
+{
+    const char *name_utf8 = as_utf8(name);
+    if (!name_utf8) {
+        return NULL;
+    }
+    // A tag belongs to the runtime the module was loaded into
+    if (!self->runtime) {
+        PyErr_SetString(PyExc_RuntimeError, "module is not loaded");
+        return NULL;
+    }
+    IM3Tag tag = m3_FindTag(self->m, name_utf8);
+    if (!tag) {
+        return PyErr_Format(PyExc_RuntimeError, "%s: no tag exported as '%s'", m3Err_tagLookupFailed, name_utf8);
+    }
+    return new_tag_object(self->runtime, tag);
+}
+
+static PyObject *
+M3_Module_link_tag_unlocked(m3_module *self, PyObject *args)
+{
+    const char *mod_name, *tag_name;
+    PyObject *tag;
+    if (!PyArg_ParseTuple(args, "ssO!:link_tag", &mod_name, &tag_name, (PyTypeObject *)M3_Tag_Type, &tag)) {
+        return NULL;
+    }
+    // The module refers to the tag for as long as it is loaded, and a host tag lives
+    // as long as the runtime it was made in
+    if (PyList_Append(self->linked, tag) < 0) {
+        return NULL;
+    }
+    M3Result err = m3_LinkTag(self->m, mod_name, tag_name, ((m3_tag *)tag)->t);
+    if (err) {
+        PySequence_DelItem(self->linked, PyList_Size(self->linked) - 1);
+        return PyErr_Format(PyExc_RuntimeError, "%s: %s.%s", err, mod_name, tag_name);
+    }
     Py_RETURN_NONE;
 }
 
@@ -1078,6 +1299,8 @@ WITH_ENV_LOCK(M3_Module_link_global,       m3_module, self->env)
 WITH_ENV_LOCK(M3_Module_get_global,        m3_module, self->env)
 WITH_ENV_LOCK(M3_Module_set_global,        m3_module, self->env)
 WITH_ENV_LOCK(M3_Module_get_memory,        m3_module, self->env)
+WITH_ENV_LOCK(M3_Module_get_tag,           m3_module, self->env)
+WITH_ENV_LOCK(M3_Module_link_tag,          m3_module, self->env)
 
 static PyMethodDef M3_Module_methods[] = {
     {"link_function", (PyCFunction)M3_Module_link_function,  METH_VARARGS,
@@ -1094,6 +1317,12 @@ static PyMethodDef M3_Module_methods[] = {
 
     {"get_memory", (PyCFunction)M3_Module_get_memory,  METH_VARARGS,
         PyDoc_STR("get_memory(index_or_export_name=0) -> Memory")},
+
+    {"get_tag", (PyCFunction)M3_Module_get_tag,  METH_O,
+        PyDoc_STR("get_tag(export_name) -> Tag")},
+
+    {"link_tag", (PyCFunction)M3_Module_link_tag,  METH_VARARGS,
+        PyDoc_STR("link_tag(module, name, tag)")},
 
     {NULL,              NULL}           /* sentinel */
 };
@@ -1176,20 +1405,108 @@ void print_backtrace(IM3Runtime runtime)
     fprintf(stderr, "\n");
 }
 
+// Raises the exception a call ended with when nothing caught it: the Python exception
+// an import raised, if that is what it was, or else a WasmException with the tag and
+// payload it was thrown with.
+static PyObject *
+raise_uncaught(IM3Runtime runtime, M3Result err)
+{
+    m3_runtime *self = (m3_runtime *)m3_GetUserData(runtime);
+    IM3Tag tag = m3_GetExceptionTag(runtime);
+    uint32_t count = m3_GetTagArgCount(tag);
+    if (!self || !tag || count > MAX_ARGS) {
+        return formatError(PyExc_RuntimeError, runtime, err);
+    }
+
+    uint64_t    valbuff[MAX_ARGS];
+    const void* valptrs[MAX_ARGS];
+    memset(valbuff, 0, sizeof(valbuff));
+    for (uint32_t i = 0; i < count; ++i) {
+        valptrs[i] = &valbuff[i];
+    }
+    M3Result res = m3_GetExceptionArgs(runtime, count, valptrs);
+    if (res) {
+        return formatError(PyExc_RuntimeError, runtime, res);
+    }
+
+    if (tag == self->error_tag) {
+        PyObject *entry = PyList_GetItem(self->errors, (Py_ssize_t)valbuff[0]);
+        if (!entry) {
+            return NULL;
+        }
+        PyObject *type  = PyTuple_GetItem(entry, 0);
+        PyObject *value = PyTuple_GetItem(entry, 1);
+        PyObject *tb    = PyTuple_GetItem(entry, 2);
+        Py_INCREF(type);
+        Py_INCREF(value);
+        if (tb == Py_None) {
+            tb = NULL;
+        } else {
+            Py_INCREF(tb);
+        }
+        PyErr_Restore(type, value, tb);
+        return NULL;
+    }
+
+    PyObject *args = PyTuple_New(count + 1);
+    if (!args) {
+        return NULL;
+    }
+    PyObject *tagobj = new_tag_object(self, tag);
+    if (!tagobj) {
+        Py_DECREF(args);
+        return NULL;
+    }
+    PyTuple_SetItem(args, 0, tagobj);
+    for (uint32_t i = 0; i < count; ++i) {
+        PyObject *val = get_arg_from_stack(&valbuff[i], m3_GetTagArgType(tag, i));
+        if (!val) {
+            Py_DECREF(args);
+            return NULL;
+        }
+        PyTuple_SetItem(args, i + 1, val);
+    }
+    PyObject *exc = PyObject_Call(M3_WasmException, args, NULL);
+    Py_DECREF(args);
+    if (exc) {
+        PyErr_SetObject(M3_WasmException, exc);
+        Py_DECREF(exc);
+    }
+    return NULL;
+}
+
 // What a call or a resume hands back to Python: the results, None for one that paused
 // (Runtime.suspended tells the two apart), or the exception.
 static PyObject *
 call_outcome(IM3Runtime runtime, IM3Function f, M3Result err)
 {
+    PyObject *result;
     if (err == m3Err_continuationSuspended) {
-        Py_RETURN_NONE;
+        Py_INCREF(Py_None);
+        result = Py_None;
     } else if (err == trapException) {
-        return NULL;
+        result = NULL;
+    } else if (err == m3Err_trapUncaughtException) {
+        result = raise_uncaught(runtime, err);
     } else if (err) {
         print_backtrace(runtime);
-        return formatError(PyExc_RuntimeError, runtime, err);
+        result = formatError(PyExc_RuntimeError, runtime, err);
+    } else {
+        result = get_results(runtime, f);
     }
-    return get_results(runtime, f);
+
+    // Once the outermost call is over, no throw_ref can reach the Python exceptions
+    // still in flight - but a paused one can, when it is resumed
+    m3_runtime *self = (m3_runtime *)m3_GetUserData(runtime);
+    if (self && runtime->callNesting == 0 && !m3_IsSuspended(runtime) && PyList_Size(self->errors) > 0) {
+        PyObject *type, *value, *tb;
+        PyErr_Fetch(&type, &value, &tb);
+        if (PyList_SetSlice(self->errors, 0, PY_SSIZE_T_MAX, NULL) < 0) {
+            PyErr_Clear();
+        }
+        PyErr_Restore(type, value, tb);
+    }
+    return result;
 }
 
 static PyObject *
@@ -1325,6 +1642,169 @@ static PyType_Slot M3_Function_Type_slots[] = {
     {0, 0}
 };
 
+static const char *
+type_name(M3ValueType type)
+{
+    switch (type) {
+        case c_m3Type_i32:          return "i32";
+        case c_m3Type_i64:          return "i64";
+        case c_m3Type_f32:          return "f32";
+        case c_m3Type_f64:          return "f64";
+        case c_m3Type_funcref:      return "funcref";
+        case c_m3Type_externref:    return "externref";
+        case c_m3Type_exnref:       return "exnref";
+        case c_m3Type_contref:      return "contref";
+        default:                    return "?";
+    }
+}
+
+static PyObject *
+Tag_num_args(m3_tag *self, void * closure)
+{
+    return PyLong_FromUnsignedLong(m3_GetTagArgCount(self->t));
+}
+
+static PyObject *
+Tag_arg_types(m3_tag *self, void * closure)
+{
+    uint32_t count = m3_GetTagArgCount(self->t);
+    PyObject *ret = PyTuple_New(count);
+    if (ret) {
+        for (uint32_t i = 0; i < count; ++i) {
+            PyTuple_SetItem(ret, i, PyLong_FromLong(m3_GetTagArgType(self->t, i)));
+        }
+    }
+    return ret;
+}
+
+static PyObject *
+Tag_repr(m3_tag *self)
+{
+    char params[256] = "";
+    size_t used = 0;
+    uint32_t count = m3_GetTagArgCount(self->t);
+    for (uint32_t i = 0; i < count && used < sizeof(params); ++i) {
+        used += snprintf(params + used, sizeof(params) - used, "%s%s", i ? ", " : "",
+                         type_name(m3_GetTagArgType(self->t, i)));
+    }
+    return PyUnicode_FromFormat("<wasm3.Tag (%s)>", params);
+}
+
+// A tag is its identity, so two Tag objects are equal when they wrap the same one -
+// a WasmException's tag compares equal to the Tag it was thrown with
+static PyObject *
+Tag_richcompare(PyObject *a, PyObject *b, int op)
+{
+    if ((op != Py_EQ && op != Py_NE) || !PyObject_TypeCheck(b, (PyTypeObject *)M3_Tag_Type)) {
+        Py_RETURN_NOTIMPLEMENTED;
+    }
+    int same = ((m3_tag *)a)->t == ((m3_tag *)b)->t;
+    return PyBool_FromLong(op == Py_EQ ? same : !same);
+}
+
+static Py_hash_t
+Tag_hash(m3_tag *self)
+{
+    Py_hash_t hash = (Py_hash_t)((uintptr_t)self->t >> 3);
+    return hash == -1 ? -2 : hash;
+}
+
+static void
+delTag(m3_tag *self)
+{
+    self->t = NULL;
+    Py_XDECREF((PyObject *)self->runtime);
+    self->runtime = NULL;
+}
+
+static PyGetSetDef M3_Tag_properties[] = {
+    {"num_args",  (getter) Tag_num_args, NULL, "number of payload values", NULL},
+    {"arg_types", (getter) Tag_arg_types, NULL, "types of the payload values", NULL},
+    {NULL}  /* Sentinel */
+};
+
+static PyType_Slot M3_Tag_Type_slots[] = {
+    {Py_tp_doc, "The wasm3.Tag type: the identity of a Wasm exception"},
+    {Py_tp_finalize, delTag},
+    {Py_tp_repr, Tag_repr},
+    {Py_tp_richcompare, Tag_richcompare},
+    {Py_tp_hash, Tag_hash},
+    {Py_tp_getset, M3_Tag_properties},
+    {0, 0}
+};
+
+// WasmException(tag, *payload): what's in args, read back by name
+static PyObject *
+WasmException_tag(PyObject *unused, PyObject *exc)
+{
+    PyObject *args = PyObject_GetAttrString(exc, "args");
+    if (!args) {
+        return NULL;
+    }
+    PyObject *tag = PyTuple_Size(args) > 0 ? PyTuple_GetItem(args, 0) : Py_None;
+    Py_INCREF(tag);
+    Py_DECREF(args);
+    return tag;
+}
+
+static PyObject *
+WasmException_payload(PyObject *unused, PyObject *exc)
+{
+    PyObject *args = PyObject_GetAttrString(exc, "args");
+    if (!args) {
+        return NULL;
+    }
+    PyObject *payload = PyTuple_GetSlice(args, 1, PY_SSIZE_T_MAX);
+    Py_DECREF(args);
+    return payload;
+}
+
+static PyMethodDef WasmException_getters[] = {
+    {"tag",     WasmException_tag,     METH_O, PyDoc_STR("the wasm3.Tag it was thrown with")},
+    {"payload", WasmException_payload, METH_O, PyDoc_STR("the values it carries, as a tuple")},
+    {NULL, NULL}
+};
+
+PyDoc_STRVAR(WasmException_doc,
+"WasmException(tag, *payload)\n\n"
+"A Wasm exception. Raised when one escapes a call; raised by an import, it is thrown\n"
+"into the guest, where a catch naming the tag gets the payload.");
+
+static PyObject *
+newWasmException(void)
+{
+    PyObject *builtins = PyImport_ImportModule("builtins");
+    if (!builtins) {
+        return NULL;
+    }
+    PyObject *property = PyObject_GetAttrString(builtins, "property");
+    Py_DECREF(builtins);
+    PyObject *dict = PyDict_New();
+    if (!property || !dict) {
+        goto fail;
+    }
+    for (PyMethodDef *def = WasmException_getters; def->ml_name; ++def) {
+        PyObject *fget = PyCFunction_NewEx(def, NULL, NULL);
+        PyObject *doc = fget ? PyUnicode_FromString(def->ml_doc) : NULL;
+        PyObject *prop = doc ? PyObject_CallFunctionObjArgs(property, fget, Py_None, Py_None, doc, NULL) : NULL;
+        Py_XDECREF(fget);
+        Py_XDECREF(doc);
+        if (!prop || PyDict_SetItemString(dict, def->ml_name, prop) < 0) {
+            Py_XDECREF(prop);
+            goto fail;
+        }
+        Py_DECREF(prop);
+    }
+    PyObject *type = PyErr_NewExceptionWithDoc("wasm3.WasmException", WasmException_doc, PyExc_RuntimeError, dict);
+    Py_DECREF(property);
+    Py_DECREF(dict);
+    return type;
+ fail:
+    Py_XDECREF(property);
+    Py_XDECREF(dict);
+    return NULL;
+}
+
 static PyType_Spec M3_Environment_Type_spec = {
     "wasm3.Environment",
     sizeof(m3_environment),
@@ -1366,6 +1846,15 @@ static PyType_Spec M3_Memory_Type_spec = {
     M3_Memory_Type_slots
 };
 
+static PyType_Spec M3_Tag_Type_spec = {
+    "wasm3.Tag",
+    sizeof(m3_tag),
+    0,
+    // Runtime.new_tag() and Module.get_tag() make them: a tag belongs to a runtime
+    Py_TPFLAGS_DEFAULT | Py_TPFLAGS_DISALLOW_INSTANTIATION,
+    M3_Tag_Type_slots
+};
+
 static int
 m3_modexec(PyObject *m)
 {
@@ -1384,6 +1873,12 @@ m3_modexec(PyObject *m)
     M3_Memory_Type = PyType_FromSpec(&M3_Memory_Type_spec);
     if (M3_Memory_Type == NULL)
         goto fail;
+    M3_Tag_Type = PyType_FromSpec(&M3_Tag_Type_spec);
+    if (M3_Tag_Type == NULL)
+        goto fail;
+    M3_WasmException = newWasmException();
+    if (M3_WasmException == NULL)
+        goto fail;
     if (PyModule_AddStringMacro(m, M3_VERSION) < 0)
         goto fail;
     // AddObjectRef, not AddObject: keeps the static M3_*_Type pointers owners.
@@ -1396,6 +1891,10 @@ m3_modexec(PyObject *m)
     if (PyModule_AddObjectRef(m, "Function", M3_Function_Type) < 0)
         goto fail;
     if (PyModule_AddObjectRef(m, "Memory", M3_Memory_Type) < 0)
+        goto fail;
+    if (PyModule_AddObjectRef(m, "Tag", M3_Tag_Type) < 0)
+        goto fail;
+    if (PyModule_AddObjectRef(m, "WasmException", M3_WasmException) < 0)
         goto fail;
     return 0;
  fail:

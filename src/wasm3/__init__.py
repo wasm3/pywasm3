@@ -13,6 +13,8 @@ from wasm3._wasm3 import (
     Memory,
     Module,
     Runtime,
+    Tag,
+    WasmException,
 )
 from wasm3._wasm3 import (
     Environment as _Environment,
@@ -53,7 +55,9 @@ __all__ = [
     "Memory",
     "Module",
     "Runtime",
+    "Tag",
     "WabtError",
+    "WasmException",
     "wasm2wat",
     "wat2wasm",
 ]

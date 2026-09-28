@@ -80,6 +80,7 @@ uv run --no-sources examples/00-fibonacci.py
 
 - [Text format](https://github.com/wasm3/pywasm3/blob/main/docs/text-format.md) - the bundled `wat2wasm` / `wasm2wat`
 - [Suspend, resume and snapshots](https://github.com/wasm3/pywasm3/blob/main/docs/suspend-resume.md) - pause a call, save it, pick it up in another process
+- [Exceptions](https://github.com/wasm3/pywasm3/blob/main/docs/exceptions.md) - Wasm exceptions in and out of the guest, and Python ones through it
 - [Development](https://github.com/wasm3/pywasm3/blob/main/docs/development.md) - building from source, tests, releases
 
 ### License

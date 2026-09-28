@@ -41,6 +41,10 @@ class Runtime:
     def continuation_used(self) -> int: ...
     def load(self, module: Module, /) -> None: ...
     def find_function(self, name: str, /) -> Function: ...
+    # A tag of the host's own, its payload typed like a link_function signature:
+    # "v(iF)" carries an i32 and an f64. Guest code can only catch_all it, unless it is
+    # linked to one of the module's tag imports with Module.link_tag().
+    def new_tag(self, signature: str, /) -> Tag: ...
 
     # Suspendable execution. The pause points are compiled in, so set suspendable before
     # find_function(), like gas_limit. A call that pauses returns None with `suspended`
@@ -77,6 +81,37 @@ class Module:
     # By index, or by export name ("memory"). Raises RuntimeError when there is no such
     # memory, or before the module is loaded.
     def get_memory(self, key: int | str = 0, /) -> Memory: ...
+    # A tag the module exports; raises RuntimeError before the module is loaded.
+    def get_tag(self, name: str, /) -> Tag: ...
+    # Satisfies a tag import. Code refers to a tag as whatever it was linked to when it
+    # compiled, so link before find_function(). Raises RuntimeError when the module
+    # imports no such tag, or one of another type.
+    def link_tag(self, module: str, name: str, tag: Tag, /) -> None: ...
+
+class Tag:
+    """The identity of a Wasm exception: a catch clause catches what was thrown with the
+    tag it names. Tags wrapping the same one compare equal."""
+
+    @property
+    def num_args(self) -> int: ...
+    # The payload's types, as Function.arg_types.
+    @property
+    def arg_types(self) -> tuple[int, ...]: ...
+
+class WasmException(RuntimeError):
+    """WasmException(tag, *payload): a Wasm exception.
+
+    Raised when one escapes a call. Raised by an import, it is thrown into the guest,
+    where a catch naming the tag gets the payload. Any other Exception an import raises
+    crosses the guest too - catch_all catches it, throw_ref sends it on - and comes out
+    as itself; a BaseException that isn't an Exception traps instead.
+    """
+
+    def __init__(self, tag: Tag, /, *payload: WasmValue) -> None: ...
+    @property
+    def tag(self) -> Tag: ...
+    @property
+    def payload(self) -> tuple[WasmValue, ...]: ...
 
 class Memory:
     """A module's linear memory, looked up afresh on every access - safe to keep across memory.grow.
