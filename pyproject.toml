@@ -23,6 +23,7 @@ classifiers = [
     "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
     "Programming Language :: Python :: 3.14",
+    "Programming Language :: Python :: 3.15",
     "Programming Language :: Python :: Implementation :: CPython",
     "Operating System :: POSIX :: Linux",
     "Operating System :: Microsoft :: Windows",
@@ -55,9 +56,9 @@ fallback_version = "0.9.0"
 
 [tool.cibuildwheel]
 build-frontend = "build[uv]"
-# cp311-* self-tags cp311-abi3 (setup.py) and covers every 3.11+ interpreter; cp314t-*
+# cp311-* self-tags cp311-abi3 (setup.py) and covers every 3.11+ interpreter; cp314t-*/cp315t-*
 # is separate because Py_LIMITED_API and Py_GIL_DISABLED are incompatible.
-build = "cp311-* cp314t-*"
+build = "cp311-* cp314t-* cp315t-*"
 test-requires = "pytest"
 # Tests run from a scratch dir, so {project} points pytest at the repo's tests/. They
 # assemble their modules with the wheel's own wabt build, so no toolchain is needed.
