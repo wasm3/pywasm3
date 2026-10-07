@@ -7,6 +7,7 @@ import subprocess
 import sys
 import sysconfig
 import threading
+import time
 
 import pytest
 from helpers import wat2wasm
@@ -131,6 +132,39 @@ def test_shared_runtime():
 
     _run_threads(target)
     assert errors == []
+
+
+def test_shared_runtime_is_entered_by_one_thread_at_a_time():
+    # An import that gives up the GIL mid-call (a sleep, I/O) must not let another thread
+    # start a call on the same runtime - it would run on top of the first one's wasm stack
+    # (a stack overflow trap) or corrupt it. This forces the switch every time instead of
+    # leaving it to the scheduler, so it holds on builds with a GIL as well as without.
+    env = wasm3.Environment()
+    rt = env.new_runtime(64 * 1024)
+    mod = env.parse_module(WORK_WASM)
+    rt.load(mod)
+    inside = 0
+    peak = 0
+    guard = threading.Lock()
+
+    def check(slot, value):
+        nonlocal inside, peak
+        with guard:
+            inside += 1
+            peak = max(peak, inside)
+        time.sleep(0.001)
+        with guard:
+            inside -= 1
+
+    mod.link_function("env", "check", "v(ii)", check)
+    work = rt.find_function("work")
+
+    def target(i):
+        for n in range(10):
+            assert work(i * 10 + n, n) == FIB[n]
+
+    _run_threads(target)
+    assert peak == 1
 
 
 def test_request_suspend_from_another_thread():

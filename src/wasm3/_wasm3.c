@@ -25,14 +25,20 @@ typedef struct {
     uintptr_t   owner;      // the holding thread's ident, 0 when free
     int         depth;
 } m3_lock;
+#else
+// The same, for builds with a GIL: it does not keep two threads out of a runtime for the
+// length of a call, as an import may let go of it, so a lock of the environment's own does
+typedef struct {
+    PyThread_type_lock  mutex;  // made with the environment
+    unsigned long       owner;  // the holding thread's ident, 0 when free; the GIL guards it
+    int                 depth;
+} m3_lock;
 #endif
 
 typedef struct {
     PyObject_HEAD
     IM3Environment e;
-#ifdef Py_GIL_DISABLED
     m3_lock lock;
-#endif
 } m3_environment;
 
 typedef struct {
@@ -139,8 +145,36 @@ static PyMutex arena_mutex;
 #define arena_lock()        PyMutex_Lock(&arena_mutex)
 #define arena_unlock()      PyMutex_Unlock(&arena_mutex)
 #else
-#define env_lock(env)       ((void)0)
-#define env_unlock(env)     ((void)0)
+static void
+env_lock(m3_environment *env)
+{
+    if (!env) return;
+    unsigned long me = PyThread_get_thread_ident();
+    if (env->lock.owner == me) {
+        env->lock.depth++;
+        return;
+    }
+    if (!PyThread_acquire_lock(env->lock.mutex, NOWAIT_LOCK)) {
+        // Let go of the GIL while waiting, or the holder could never get back to run
+        Py_BEGIN_ALLOW_THREADS
+        PyThread_acquire_lock(env->lock.mutex, WAIT_LOCK);
+        Py_END_ALLOW_THREADS
+    }
+    env->lock.owner = me;
+    env->lock.depth = 1;
+}
+
+static void
+env_unlock(m3_environment *env)
+{
+    if (!env) return;
+    if (--env->lock.depth == 0) {
+        env->lock.owner = 0;
+        PyThread_release_lock(env->lock.mutex);
+    }
+}
+
+// The GIL keeps two threads out of the arena: no Python code runs under it
 #define arena_lock()        ((void)0)
 #define arena_unlock()      ((void)0)
 #endif
@@ -182,6 +216,13 @@ newEnvironment(PyTypeObject *type, PyObject *args, PyObject *kwds)
 {
     m3_environment *self = (m3_environment *)PyType_GenericAlloc(type, 0);
     if (!self) return NULL;
+#ifndef Py_GIL_DISABLED
+    self->lock.mutex = PyThread_allocate_lock();
+    if (!self->lock.mutex) {
+        Py_DECREF((PyObject *)self);
+        return PyErr_NoMemory();
+    }
+#endif
     self->e = m3_NewEnvironment();
     if (!self->e) {
         Py_DECREF((PyObject *)self);
@@ -195,6 +236,12 @@ delEnvironment(m3_environment *self)
 {
     m3_FreeEnvironment(self->e);
     self->e = NULL;
+#ifndef Py_GIL_DISABLED
+    if (self->lock.mutex) {
+        PyThread_free_lock(self->lock.mutex);
+        self->lock.mutex = NULL;
+    }
+#endif
 }
 
 static PyObject *
